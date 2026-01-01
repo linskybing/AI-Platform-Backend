@@ -1,0 +1,140 @@
+name: CI - Lint & Build
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - '**/*.go'
+      - 'go.mod'
+      - 'go.sum'
+      - 'Dockerfile'
+      - '.github/workflows/ci.yml'
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  lint:
+    name: Lint Code
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v3
+        with:
+          version: latest
+          args: --timeout=5m ./...
+
+  fmt:
+    name: Format Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Check code format
+        run: |
+          if ! gofmt -l . | grep -q .; then
+            echo " Code is properly formatted"
+          else
+            echo "— Code formatting issues found:"
+            gofmt -l .
+            exit 1
+          fi
+
+  vet:
+    name: Run go vet
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run go vet
+        run: go vet ./...
+
+  build:
+    name: Build Binary
+    runs-on: ubuntu-latest
+    needs: [lint, fmt, vet]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Build API server
+        run: go build -o platform-api ./cmd/api
+        env:
+          CGO_ENABLED: 0
+
+      - name: Build scheduler
+        run: go build -o platform-scheduler ./cmd/scheduler
+        env:
+          CGO_ENABLED: 0
+
+      - name: Verify binaries
+        run: |
+          test -f platform-api || exit 1
+          test -f platform-scheduler || exit 1
+          echo " Both binaries built successfully"
+
+      - name: Store build artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: binaries
+          path: |
+            platform-api
+            platform-scheduler
+          retention-days: 5
+
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+
+      - name: Upload Trivy results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'

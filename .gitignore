@@ -1,0 +1,7 @@
+.env
+
+# Requirement documentation (for reference, not version controlled)
+REFACTOR_PLAN.md
+JOB_SCHEDULER_DESIGN.md
+RESOURCE_PRIORITY_DESIGN.md
+IMPLEMENTATION_CHECKLIST.md

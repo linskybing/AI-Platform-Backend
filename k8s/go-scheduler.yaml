@@ -1,0 +1,115 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: go-scheduler
+  labels:
+    app: go-scheduler
+    component: job-scheduler
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: go-scheduler
+  template:
+    metadata:
+      labels:
+        app: go-scheduler
+        component: job-scheduler
+    spec:
+      serviceAccountName: admin-sa
+      dnsPolicy: ClusterFirst
+      containers:
+        - name: go-scheduler
+          image: linskybing/platform-go-scheduler:latest
+          imagePullPolicy: Always
+          command: ["sleep", "infinity"]
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          env:
+            - name: DB_HOST
+              value: postgres
+            - name: DB_PORT
+              value: "5432"
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: pg-secret
+                  key: username
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: pg-secret
+                  key: password
+            - name: LOG_LEVEL
+              value: "info"
+          volumeMounts:
+            - mountPath: /go/web-go
+              name: local-data
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - ps aux | grep scheduler | grep -v grep
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - ps aux | grep scheduler | grep -v grep
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 3
+      volumes:
+        - name: local-data
+          hostPath:
+            path: /Users/sky/k8s/platform-go
+            type: Directory
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: scheduler-sa
+  labels:
+    app: go-scheduler
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: scheduler-role
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch", "create", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: scheduler-rolebinding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: scheduler-role
+subjects:
+  - kind: ServiceAccount
+    name: scheduler-sa
+    namespace: default

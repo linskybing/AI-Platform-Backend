@@ -1,0 +1,60 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: go-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: go-api
+  template:
+    metadata:
+      labels:
+        app: go-api
+    spec:
+      serviceAccountName: admin-sa
+      dnsPolicy: ClusterFirst
+      containers:
+        - name: go-api
+          image: linskybing/platform-go-api:latest
+          imagePullPolicy: Always
+          command: ["sleep", "infinity"]
+          volumeMounts:
+            - mountPath: /go/web-go
+              name: local-data
+          ports:
+            - containerPort: 8080
+          env:
+            - name: DB_HOST
+              value: postgres
+            - name: DB_PORT
+              value: "5432"
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: pg-secret
+                  key: username
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: pg-secret
+                  key: password
+      volumes:
+        - name: local-data
+          hostPath:
+            path: /Users/sky/k8s/platform-go
+            type: Directory
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: go-api
+spec:
+  selector:
+    app: go-api
+  ports:
+    - protocol: TCP
+      port: 8080
+      targetPort: 8080
+      nodePort: 30080
+  type: NodePort

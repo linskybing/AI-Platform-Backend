@@ -1,0 +1,184 @@
+package application_test
+
+import (
+	"errors"
+	"fmt"
+	"testing"
+
+	"github.com/gin-gonic/gin"
+	"github.com/golang/mock/gomock"
+	"github.com/linskybing/platform-go/internal/application"
+	"github.com/linskybing/platform-go/internal/domain/project"
+	"github.com/linskybing/platform-go/internal/domain/view"
+	"github.com/linskybing/platform-go/internal/repository"
+	"github.com/linskybing/platform-go/internal/repository/mock"
+	"github.com/linskybing/platform-go/pkg/utils"
+)
+
+func setupProjectMocks(t *testing.T) (*application.ProjectService,
+	*mock.MockProjectRepo,
+	*mock.MockViewRepo,
+	*mock.MockAuditRepo,
+	*gin.Context) {
+
+	ctrl := gomock.NewController(t)
+	t.Cleanup(func() { ctrl.Finish() })
+
+	mockProject := mock.NewMockProjectRepo(ctrl)
+	mockView := mock.NewMockViewRepo(ctrl)
+	mockAudit := mock.NewMockAuditRepo(ctrl)
+
+	// Provide a default behavior for ListUsersByProjectID to avoid brittle ordering issues in tests.
+	mockView.EXPECT().ListUsersByProjectID(gomock.Any()).Return([]view.ProjectUserView{}, nil).AnyTimes()
+
+	repos := &repository.Repos{
+		Project: mockProject,
+		View:    mockView,
+		Audit:   mockAudit,
+	}
+
+	svc := application.NewProjectService(repos)
+	c, _ := gin.CreateTestContext(nil)
+
+	// mock utils globally
+	utils.LogAuditWithConsole = func(c *gin.Context, action, resourceType, resourceID string, oldData, newData interface{}, msg string, repos repository.AuditRepo) {
+	}
+	utils.FormatNamespaceName = func(pid uint, username string) string { return fmt.Sprintf("ns-%d-%s", pid, username) }
+	utils.CreateNamespace = func(ns string) error { return nil }
+	utils.CreatePVC = func(ns, name, class, size string) error { return nil }
+	utils.DeleteNamespace = func(ns string) error { return nil }
+
+	return svc, mockProject, mockView, mockAudit, c
+}
+
+func TestProjectServiceCRUD(t *testing.T) {
+	svc, mockProject, _, _, c := setupProjectMocks(t)
+
+	t.Run("CreateProject success", func(t *testing.T) {
+		input := project.CreateProjectDTO{ProjectName: "proj1", GID: 1}
+
+		mockProject.EXPECT().CreateProject(gomock.Any()).Return(nil)
+
+		project, err := svc.CreateProject(c, input)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if project.ProjectName != "proj1" {
+			t.Fatalf("expected proj1, got %s", project.ProjectName)
+		}
+	})
+
+	// Resource allocation now happens when a user joins a project (via UserGroupService).
+	// The CreateProject flow does not attempt to allocate namespaces/PVCs anymore.
+
+	t.Run("UpdateProject success", func(t *testing.T) {
+		oldProject := project.Project{PID: 1, ProjectName: "old", GID: 1}
+		mockProject.EXPECT().GetProjectByID(uint(1)).Return(oldProject, nil)
+		mockProject.EXPECT().UpdateProject(gomock.Any()).Return(nil)
+
+		newName := "new"
+		input := project.UpdateProjectDTO{ProjectName: &newName}
+		project, err := svc.UpdateProject(c, 1, input)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if project.ProjectName != "new" {
+			t.Fatalf("expected new, got %s", project.ProjectName)
+		}
+	})
+
+	t.Run("UpdateProject not found", func(t *testing.T) {
+		mockProject.EXPECT().GetProjectByID(uint(99)).Return(project.Project{}, errors.New("not found"))
+		newName := "test"
+		input := project.UpdateProjectDTO{ProjectName: &newName}
+		_, err := svc.UpdateProject(c, 99, input)
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+	})
+
+	t.Run("DeleteProject success", func(t *testing.T) {
+		proj := project.Project{PID: 1, ProjectName: "proj1", GID: 1}
+		mockProject.EXPECT().GetProjectByID(uint(1)).Return(proj, nil)
+		mockProject.EXPECT().DeleteProject(uint(1)).Return(nil)
+
+		err := svc.DeleteProject(c, 1)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("DeleteProject fails if project not found", func(t *testing.T) {
+		mockProject.EXPECT().GetProjectByID(uint(99)).Return(project.Project{}, errors.New("not found"))
+		err := svc.DeleteProject(c, 99)
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+	})
+
+	t.Run("AllocateProjectResources creates namespace & pvc", func(t *testing.T) {
+		err := svc.AllocateProjectResources(1)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("RemoveProjectResources deletes namespace", func(t *testing.T) {
+		err := svc.RemoveProjectResources(1)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+}
+
+func TestProjectServiceRead(t *testing.T) {
+	svc, mockProject, mockView, _, _ := setupProjectMocks(t)
+
+	t.Run("GetProjects success", func(t *testing.T) {
+		projects := []project.Project{{PID: 1, ProjectName: "p1"}}
+		mockProject.EXPECT().ListProjects().Return(projects, nil)
+
+		res, err := svc.ListProjects()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(res) != 1 {
+			t.Fatalf("expected 1 project, got %d", len(res))
+		}
+	})
+
+	t.Run("GetProjectsByUser success", func(t *testing.T) {
+		projects := []view.ProjectUserView{{PID: 1, ProjectName: "p1"}}
+		mockView.EXPECT().ListProjectsByUserID(uint(1)).Return(projects, nil)
+
+		res, err := svc.GetProjectsByUser(1)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(res) != 1 {
+			t.Fatalf("expected 1 project, got %d", len(res))
+		}
+	})
+
+	t.Run("GetProjectByID success", func(t *testing.T) {
+		proj := project.Project{PID: 1, ProjectName: "p1"}
+		mockProject.EXPECT().GetProjectByID(uint(1)).Return(proj, nil)
+
+		res, err := svc.GetProject(1)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if res.ProjectName != "p1" {
+			t.Fatalf("expected p1, got %s", res.ProjectName)
+		}
+	})
+
+	t.Run("GetProjectByID not found", func(t *testing.T) {
+		mockProject.EXPECT().GetProjectByID(uint(99)).Return(project.Project{}, errors.New("not found"))
+
+		_, err := svc.GetProject(99)
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+	})
+}
