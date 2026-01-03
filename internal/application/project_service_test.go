@@ -61,16 +61,19 @@ func TestProjectServiceCRUD(t *testing.T) {
 			// Simulate GORM's behavior of setting the PID after successful CREATE
 			p.PID = 1
 		}).Return(nil)
+		
+		// CreateProject calls AllocateProjectResources which calls GetProjectByID
+		mockProject.EXPECT().GetProjectByID(uint(1)).Return(project.Project{PID: 1, ProjectName: "proj1", GID: 1}, nil)
 
-		project, err := svc.CreateProject(c, input)
+		proj, err := svc.CreateProject(c, input)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if project.ProjectName != "proj1" {
-			t.Fatalf("expected proj1, got %s", project.ProjectName)
+		if proj.ProjectName != "proj1" {
+			t.Fatalf("expected proj1, got %s", proj.ProjectName)
 		}
-		if project.PID != 1 {
-			t.Fatalf("expected PID 1, got %d", project.PID)
+		if proj.PID != 1 {
+			t.Fatalf("expected PID 1, got %d", proj.PID)
 		}
 	})
 
@@ -141,6 +144,7 @@ func TestProjectServiceCRUD(t *testing.T) {
 	})
 
 	t.Run("AllocateProjectResources creates namespace & pvc", func(t *testing.T) {
+		mockProject.EXPECT().GetProjectByID(uint(1)).Return(project.Project{PID: 1, ProjectName: "proj1", GID: 1}, nil)
 		err := svc.AllocateProjectResources(1)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
