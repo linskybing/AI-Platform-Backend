@@ -143,7 +143,7 @@ var CreateNamespace = func(name string) error {
 	}
 	_, err := k8s.Clientset.CoreV1().Namespaces().Get(context.TODO(), name, metav1.GetOptions{})
 	if err == nil {
-		return fmt.Errorf("namespace %s already exist \n", name)
+		return fmt.Errorf("namespace %s already exists", name)
 	}
 
 	ns := &corev1.Namespace{

@@ -435,11 +435,12 @@ func (s *ConfigFileService) enforceReadOnly(jsonBytes []byte) ([]byte, error) {
 
 	var podSpec map[string]interface{}
 
-	if kind == "Pod" {
+	switch kind {
+	case "Pod":
 		if spec, ok := obj["spec"].(map[string]interface{}); ok {
 			podSpec = spec
 		}
-	} else if kind == "Deployment" || kind == "StatefulSet" || kind == "DaemonSet" || kind == "Job" {
+	case "Deployment", "StatefulSet", "DaemonSet", "Job":
 		if spec, ok := obj["spec"].(map[string]interface{}); ok {
 			if template, ok := spec["template"].(map[string]interface{}); ok {
 				if tSpec, ok := template["spec"].(map[string]interface{}); ok {
@@ -515,11 +516,12 @@ func (s *ConfigFileService) rewriteNfsServers(jsonBytes []byte, personalAddr, pr
 	var podSpec map[string]interface{}
 
 	kind, _ := obj["kind"].(string)
-	if kind == "Pod" {
+	switch kind {
+	case "Pod":
 		if spec, ok := obj["spec"].(map[string]interface{}); ok {
 			podSpec = spec
 		}
-	} else if kind == "Deployment" || kind == "StatefulSet" || kind == "DaemonSet" || kind == "Job" {
+	case "Deployment", "StatefulSet", "DaemonSet", "Job":
 		if spec, ok := obj["spec"].(map[string]interface{}); ok {
 			if template, ok := spec["template"].(map[string]interface{}); ok {
 				if tSpec, ok := template["spec"].(map[string]interface{}); ok {

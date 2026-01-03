@@ -27,11 +27,12 @@ func (jq *JobQueue) Push(j *job.Job) {
 	jq.mu.Lock()
 	defer jq.mu.Unlock()
 	p := 0
-	if j.Priority == "high" {
+	switch j.Priority {
+	case "high":
 		p = 3
-	} else if j.Priority == "medium" {
+	case "medium":
 		p = 2
-	} else {
+	default:
 		p = 1
 	}
 	heap.Push(&jq.items, &queueItem{job: j, priority: p})

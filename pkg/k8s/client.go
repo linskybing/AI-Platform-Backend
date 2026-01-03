@@ -16,7 +16,6 @@ import (
 	"github.com/linskybing/platform-go/internal/config"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
-	v1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -166,24 +165,21 @@ func (h *WebSocketIO) pingLoop() {
 	ticker := time.NewTicker(pingPeriod)
 	defer ticker.Stop()
 
-	for {
-		select {
-		case <-ticker.C:
-			// Lock before writing to prevent race condition with stdout
-			h.mu.Lock()
-			if err := h.conn.SetWriteDeadline(time.Now().Add(10 * time.Second)); err != nil {
-				h.mu.Unlock()
-				h.Close()
-				return
-			}
-			err := h.conn.WriteMessage(websocket.PingMessage, nil)
+	for range ticker.C {
+		// Lock before writing to prevent race condition with stdout
+		h.mu.Lock()
+		if err := h.conn.SetWriteDeadline(time.Now().Add(10 * time.Second)); err != nil {
 			h.mu.Unlock()
+			h.Close()
+			return
+		}
+		err := h.conn.WriteMessage(websocket.PingMessage, nil)
+		h.mu.Unlock()
 
-			if err != nil {
-				// If ping fails, close connection. This will cause readLoop to exit too.
-				h.Close()
-				return
-			}
+		if err != nil {
+			// If ping fails, close connection. This will cause readLoop to exit too.
+			h.Close()
+			return
 		}
 	}
 }
@@ -766,13 +762,13 @@ func extractStatusFields(obj *unstructured.Unstructured) map[string]interface{} 
 	return result
 }
 
-func GetFilteredNamespaces(filter string) ([]v1.Namespace, error) {
+func GetFilteredNamespaces(filter string) ([]corev1.Namespace, error) {
 	namespaces, err := Clientset.CoreV1().Namespaces().List(context.TODO(), metav1.ListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to list namespaces: %v", err)
 	}
 
-	var filteredNamespaces []v1.Namespace
+	var filteredNamespaces []corev1.Namespace
 	for _, ns := range namespaces.Items {
 		if strings.Contains(ns.Name, filter) {
 			filteredNamespaces = append(filteredNamespaces, ns)

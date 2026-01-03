@@ -851,7 +851,7 @@ func (h *K8sHandler) StartProjectFileBrowser(c *gin.Context) {
 	}
 
 	// 2. Permission Logic: Only higher roles get Write access
-	isReadOnly := !(normalizedRole == "admin" || normalizedRole == "manager")
+	isReadOnly := normalizedRole != "admin" && normalizedRole != "manager"
 
 	// 3. Metadata for K8s & ensure project hub exists
 	project, err := h.ProjectService.GetProject(uint(pID))

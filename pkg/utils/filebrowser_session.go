@@ -121,7 +121,7 @@ func CreateFileBrowserService(ctx context.Context, ns string, pvcName string) (s
 
 	// Wait for NodePort allocation (usually instant, but good to be safe)
 	var nodePort int32
-	err = wait.PollImmediate(100*time.Millisecond, 5*time.Second, func() (bool, error) {
+	err = wait.PollUntilContextTimeout(ctx, 100*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
 		if len(createdSvc.Spec.Ports) > 0 && createdSvc.Spec.Ports[0].NodePort > 0 {
 			nodePort = createdSvc.Spec.Ports[0].NodePort
 			return true, nil

@@ -66,9 +66,10 @@ func (s *GPURequestService) ProcessRequest(requestID uint, status string) (gpu.G
 			return req, err
 		}
 
-		if req.Type == gpu.GPURequestTypeQuota {
+		switch req.Type {
+		case gpu.GPURequestTypeQuota:
 			project.GPUQuota = req.RequestedQuota
-		} else if req.Type == gpu.GPURequestTypeAccess {
+		case gpu.GPURequestTypeAccess:
 			project.GPUAccess = req.RequestedAccessType
 		}
 
