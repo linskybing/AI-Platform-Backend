@@ -62,7 +62,7 @@ func ExecWebSocketHandler(c *gin.Context) {
 		}
 		jsonMsg, _ := json.Marshal(errorMsg)
 		_ = conn.WriteMessage(websocket.TextMessage, jsonMsg)
-		conn.Close()
+		_ = conn.Close()
 		return
 	}
 }
@@ -96,9 +96,9 @@ func WatchNamespaceHandler(c *gin.Context) {
 
 	// 4. Configure Heartbeat (Reader Side)
 	conn.SetReadLimit(512 * 1024)
-	conn.SetReadDeadline(time.Now().Add(pongWait))
+	_ = conn.SetReadDeadline(time.Now().Add(pongWait))
 	conn.SetPongHandler(func(string) error {
-		conn.SetReadDeadline(time.Now().Add(pongWait))
+		_ = conn.SetReadDeadline(time.Now().Add(pongWait))
 		return nil
 	})
 
@@ -107,7 +107,7 @@ func WatchNamespaceHandler(c *gin.Context) {
 
 	// 5. Writer Goroutine (Handles Batching & Ping)
 	go func() {
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 
 		// Ticker for Heartbeat Pings
 		pingTicker := time.NewTicker(pingPeriod)
@@ -132,7 +132,7 @@ func WatchNamespaceHandler(c *gin.Context) {
 				return err
 			}
 
-			conn.SetWriteDeadline(time.Now().Add(writeWait))
+			_ = conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if err := conn.WriteMessage(websocket.TextMessage, batchData); err != nil {
 				return err
 			}
@@ -146,7 +146,7 @@ func WatchNamespaceHandler(c *gin.Context) {
 			select {
 			case msg, ok := <-writeChan:
 				if !ok {
-					conn.WriteMessage(websocket.CloseMessage, []byte{})
+					_ = conn.WriteMessage(websocket.CloseMessage, []byte{})
 					return
 				}
 
@@ -176,7 +176,7 @@ func WatchNamespaceHandler(c *gin.Context) {
 					return
 				}
 
-				conn.SetWriteDeadline(time.Now().Add(writeWait))
+				_ = conn.SetWriteDeadline(time.Now().Add(writeWait))
 				if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 					cancel()
 					return

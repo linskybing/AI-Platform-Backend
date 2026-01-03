@@ -820,7 +820,7 @@ func (h *K8sHandler) ProjectStorageProxy(c *gin.Context) {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadGateway)
-		w.Write([]byte(fmt.Sprintf(`{"error": "Storage service unreachable. Is the drive started?", "details": "%v"}`, err)))
+		_, _ = fmt.Fprintf(w, `{"error": "Storage service unreachable. Is the drive started?", "details": "%v"}`, err)
 	}
 
 	// 7. Serve Content
