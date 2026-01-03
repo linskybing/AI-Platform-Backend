@@ -571,17 +571,15 @@ var CreateNFSDeployment = func(ns string, pvcName string) error {
 	return nil
 }
 
-// CreateNFSService creates a ClusterIP service to expose the NFS server.
-// This service acts as the stable endpoint (Gateway) for project namespaces to mount storage.
-var CreateNFSService = func(ns string) error {
+// CreateNFSServiceWithName creates a ClusterIP service exposing NFS ports under the provided service name.
+var CreateNFSServiceWithName = func(ns string, svcName string) error {
 	if k8s.Clientset == nil {
-		fmt.Printf("[MOCK] NFS Service created in %s\n", ns)
+		fmt.Printf("[MOCK] NFS Service %s created in %s\n", svcName, ns)
 		return nil
 	}
 
-	name := "storage-svc"
 	svc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{Name: name},
+		ObjectMeta: metav1.ObjectMeta{Name: svcName},
 		Spec: corev1.ServiceSpec{
 			Selector: map[string]string{"app": "nfs-gateway"},
 			Ports: []corev1.ServicePort{
@@ -595,10 +593,15 @@ var CreateNFSService = func(ns string) error {
 
 	_, err := k8s.Clientset.CoreV1().Services(ns).Create(context.TODO(), svc, metav1.CreateOptions{})
 	if err != nil && !apierrors.IsAlreadyExists(err) {
-		return fmt.Errorf("failed to create NFS service: %w", err)
+		return fmt.Errorf("failed to create NFS service %s: %w", svcName, err)
 	}
-	fmt.Printf("NFS Service created in %s\n", ns)
+	fmt.Printf("NFS Service %s created in %s\n", svcName, ns)
 	return nil
+}
+
+// CreateNFSService creates the personal storage NFS service using the default name.
+var CreateNFSService = func(ns string) error {
+	return CreateNFSServiceWithName(ns, config.PersonalStorageServiceName)
 }
 
 // CreateNFSPV creates a PersistentVolume backed by an NFS server.

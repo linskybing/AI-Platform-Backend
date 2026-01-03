@@ -19,6 +19,7 @@ func setupUserGroupMocks(t *testing.T) (*UserGroupService,
 	*mock.MockUserGroupRepo,
 	*mock.MockUserRepo,
 	*mock.MockProjectRepo,
+	*mock.MockGroupRepo,
 	*mock.MockAuditRepo,
 	*gin.Context) {
 
@@ -28,12 +29,14 @@ func setupUserGroupMocks(t *testing.T) (*UserGroupService,
 	mockUG := mock.NewMockUserGroupRepo(ctrl)
 	mockUser := mock.NewMockUserRepo(ctrl)
 	mockProject := mock.NewMockProjectRepo(ctrl)
+	mockGroup := mock.NewMockGroupRepo(ctrl)
 	mockAudit := mock.NewMockAuditRepo(ctrl)
 
 	repos := &repository.Repos{
 		UserGroup: mockUG,
 		User:      mockUser,
 		Project:   mockProject,
+		Group:     mockGroup,
 		Audit:     mockAudit,
 	}
 
@@ -51,7 +54,7 @@ func setupUserGroupMocks(t *testing.T) (*UserGroupService,
 	utils.CreatePVC = func(ns, name, class, size string) error { return nil }
 	utils.DeleteNamespace = func(ns string) error { return nil }
 
-	return service, mockUG, mockUser, mockProject, mockAudit, ctx
+	return service, mockUG, mockUser, mockProject, mockGroup, mockAudit, ctx
 }
 
 //
@@ -60,7 +63,7 @@ func setupUserGroupMocks(t *testing.T) (*UserGroupService,
 
 // ---------- CreateUserGroup ----------
 func TestCreateUserGroup_Success(t *testing.T) {
-	svc, ugRepo, userRepo, projectRepo, _, ctx := setupUserGroupMocks(t)
+	svc, ugRepo, userRepo, projectRepo, _, _, ctx := setupUserGroupMocks(t)
 
 	ug := &group.UserGroup{UID: 1, GID: 2}
 	projects := []project.Project{{PID: 100, ProjectName: "p1"}}
@@ -76,7 +79,7 @@ func TestCreateUserGroup_Success(t *testing.T) {
 }
 
 func TestCreateUserGroup_Fail_CreateRepo(t *testing.T) {
-	svc, ugRepo, _, _, _, ctx := setupUserGroupMocks(t)
+	svc, ugRepo, _, _, _, _, ctx := setupUserGroupMocks(t)
 
 	ug := &group.UserGroup{UID: 1, GID: 2}
 	ugRepo.EXPECT().CreateUserGroup(ug).Return(errors.New("db error"))
@@ -88,7 +91,7 @@ func TestCreateUserGroup_Fail_CreateRepo(t *testing.T) {
 }
 
 func TestCreateUserGroup_Fail_GetUser(t *testing.T) {
-	svc, ugRepo, userRepo, _, _, ctx := setupUserGroupMocks(t)
+	svc, ugRepo, userRepo, _, _, _, ctx := setupUserGroupMocks(t)
 
 	ug := &group.UserGroup{UID: 1, GID: 2}
 	ugRepo.EXPECT().CreateUserGroup(ug).Return(nil)
@@ -101,7 +104,7 @@ func TestCreateUserGroup_Fail_GetUser(t *testing.T) {
 }
 
 func TestUpdateUserGroup_Success(t *testing.T) {
-	svc, ugRepo, _, _, _, ctx := setupUserGroupMocks(t)
+	svc, ugRepo, _, _, _, _, ctx := setupUserGroupMocks(t)
 
 	oldUG := group.UserGroup{UID: 1, GID: 1, Role: "user"}
 	newUG := &group.UserGroup{UID: 1, GID: 1, Role: "admin"}
@@ -114,7 +117,7 @@ func TestUpdateUserGroup_Success(t *testing.T) {
 }
 
 func TestUpdateUserGroup_Fail_UpdateRepo(t *testing.T) {
-	svc, ugRepo, _, _, _, ctx := setupUserGroupMocks(t)
+	svc, ugRepo, _, _, _, _, ctx := setupUserGroupMocks(t)
 
 	oldUG := group.UserGroup{UID: 1, GID: 1}
 	newUG := &group.UserGroup{UID: 1, GID: 1}
@@ -129,7 +132,7 @@ func TestUpdateUserGroup_Fail_UpdateRepo(t *testing.T) {
 
 // ---------- DeleteUserGroup ----------
 func TestDeleteUserGroup_Success(t *testing.T) {
-	svc, ugRepo, userRepo, projectRepo, _, ctx := setupUserGroupMocks(t)
+	svc, ugRepo, userRepo, projectRepo, _, _, ctx := setupUserGroupMocks(t)
 
 	oldUG := group.UserGroup{UID: 1, GID: 2}
 	ugRepo.EXPECT().GetUserGroup(uint(1), uint(2)).Return(oldUG, nil)
@@ -143,7 +146,7 @@ func TestDeleteUserGroup_Success(t *testing.T) {
 }
 
 func TestDeleteUserGroup_Fail_DeleteRepo(t *testing.T) {
-	svc, ugRepo, _, _, _, ctx := setupUserGroupMocks(t)
+	svc, ugRepo, _, _, _, _, ctx := setupUserGroupMocks(t)
 
 	oldUG := group.UserGroup{UID: 1, GID: 2}
 	ugRepo.EXPECT().GetUserGroup(uint(1), uint(2)).Return(oldUG, nil)
@@ -156,7 +159,7 @@ func TestDeleteUserGroup_Fail_DeleteRepo(t *testing.T) {
 
 // ---------- AllocateGroupResource ----------
 func TestAllocateGroupResource_Success(t *testing.T) {
-	svc, _, _, projectRepo, _, _ := setupUserGroupMocks(t)
+	svc, _, _, projectRepo, _, _, _ := setupUserGroupMocks(t)
 
 	projectRepo.EXPECT().ListProjectsByGroup(uint(1)).Return([]project.Project{{PID: 100}}, nil)
 
@@ -166,7 +169,7 @@ func TestAllocateGroupResource_Success(t *testing.T) {
 }
 
 func TestAllocateGroupResource_Fail_ListProjects(t *testing.T) {
-	svc, _, _, projectRepo, _, _ := setupUserGroupMocks(t)
+	svc, _, _, projectRepo, _, _, _ := setupUserGroupMocks(t)
 
 	projectRepo.EXPECT().ListProjectsByGroup(uint(1)).Return(nil, errors.New("db fail"))
 
@@ -177,7 +180,7 @@ func TestAllocateGroupResource_Fail_ListProjects(t *testing.T) {
 
 // ---------- RemoveGroupResource ----------
 func TestRemoveGroupResource_Success(t *testing.T) {
-	svc, _, _, projectRepo, _, _ := setupUserGroupMocks(t)
+	svc, _, _, projectRepo, _, _, _ := setupUserGroupMocks(t)
 
 	projectRepo.EXPECT().ListProjectsByGroup(uint(1)).Return([]project.Project{{PID: 100}}, nil)
 
@@ -188,7 +191,21 @@ func TestRemoveGroupResource_Success(t *testing.T) {
 
 // ---------- Formatter ----------
 func TestFormatByUID(t *testing.T) {
-	svc, _, _, _, _, _ := setupUserGroupMocks(t)
+	svc, _, mockUserRepo, _, mockGroupRepo, _, _ := setupUserGroupMocks(t)
+
+	// Add mock expectations for GetUsernameByID calls
+	mockUserRepo.EXPECT().GetUsernameByID(uint(1)).Return("user1", nil)
+	mockUserRepo.EXPECT().GetUsernameByID(uint(2)).Return("user2", nil)
+
+	// Add mock expectations for GetGroupByID calls
+	mockGroupRepo.EXPECT().GetGroupByID(uint(10)).Return(group.Group{
+		GID:       10,
+		GroupName: "Group10",
+	}, nil).Times(2) // Called twice, once for UID 1 and once for UID 2
+	mockGroupRepo.EXPECT().GetGroupByID(uint(11)).Return(group.Group{
+		GID:       11,
+		GroupName: "Group11",
+	}, nil)
 
 	records := []group.UserGroup{
 		{UID: 1, GID: 10, Role: "user"},
@@ -201,10 +218,33 @@ func TestFormatByUID(t *testing.T) {
 	assert.Len(t, res, 2)
 	assert.NotNil(t, res[1])
 	assert.NotNil(t, res[2])
+
+	// Verify UID 1 has 2 groups
+	userData1 := res[1]
+	assert.Equal(t, uint(1), userData1["UID"])
+	assert.Equal(t, "user1", userData1["UserName"])
+	groups1 := userData1["Groups"].([]map[string]interface{})
+	assert.Len(t, groups1, 2)
+
+	// Verify UID 2 has 1 group
+	userData2 := res[2]
+	assert.Equal(t, uint(2), userData2["UID"])
+	assert.Equal(t, "user2", userData2["UserName"])
+	groups2 := userData2["Groups"].([]map[string]interface{})
+	assert.Len(t, groups2, 1)
 }
 
 func TestFormatByGID(t *testing.T) {
-	svc, _, _, _, _, _ := setupUserGroupMocks(t)
+	svc, _, mockUserRepo, _, mockGroupRepo, _, _ := setupUserGroupMocks(t)
+	// Add mock expectations for GetUsernameByID calls
+	mockUserRepo.EXPECT().GetUsernameByID(uint(1)).Return("user1", nil)
+	mockUserRepo.EXPECT().GetUsernameByID(uint(2)).Return("user2", nil)
+
+	// Add mock expectation for GetGroupByID call
+	mockGroupRepo.EXPECT().GetGroupByID(uint(10)).Return(group.Group{
+		GID:       10,
+		GroupName: "TestGroup",
+	}, nil)
 
 	records := []group.UserGroup{
 		{UID: 1, GID: 10, Role: "user"},
@@ -215,16 +255,25 @@ func TestFormatByGID(t *testing.T) {
 
 	assert.Len(t, res, 1)
 	assert.NotNil(t, res[10])
+
+	// Verify the structure contains Users array
+	groupData := res[10]
+	assert.Equal(t, uint(10), groupData["GID"])
+	assert.Equal(t, "TestGroup", groupData["GroupName"])
+	assert.NotNil(t, groupData["Users"])
+
+	users := groupData["Users"].([]map[string]interface{})
+	assert.Len(t, users, 2)
 }
 
 func TestFormatByUID_Empty(t *testing.T) {
-	svc, _, _, _, _, _ := setupUserGroupMocks(t)
+	svc, _, _, _, _, _, _ := setupUserGroupMocks(t)
 	res := svc.FormatByUID([]group.UserGroup{})
 	assert.Len(t, res, 0)
 }
 
 func TestFormatByGID_Empty(t *testing.T) {
-	svc, _, _, _, _, _ := setupUserGroupMocks(t)
+	svc, _, _, _, _, _, _ := setupUserGroupMocks(t)
 	res := svc.FormatByGID([]group.UserGroup{})
 	assert.Len(t, res, 0)
 }

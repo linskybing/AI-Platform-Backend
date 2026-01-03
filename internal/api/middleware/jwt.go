@@ -92,6 +92,13 @@ func JWTAuthMiddleware() gin.HandlerFunc {
 			return
 		}
 
+		// Explicitly enforce expiration to avoid lax parser behavior
+		if claims.ExpiresAt != nil && time.Now().After(claims.ExpiresAt.Time) {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "token expired"})
+			c.Abort()
+			return
+		}
+
 		c.Set("claims", claims)
 		c.Next()
 	}

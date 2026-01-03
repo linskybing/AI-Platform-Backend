@@ -54,7 +54,7 @@ func RegisterRoutes(r *gin.Engine) {
 			configFiles.GET("", authMiddleware.Admin(), handlers_instance.ConfigFile.ListConfigFilesHandler)
 			configFiles.GET("/:id", authMiddleware.GroupMember(middleware.FromIDParam(repos_instance.View.GetGroupIDByConfigFileID)), handlers_instance.ConfigFile.GetConfigFileHandler)
 			configFiles.GET("/:id/resources", authMiddleware.GroupMember(middleware.FromIDParam(repos_instance.View.GetGroupIDByConfigFileID)), handlers_instance.Resource.ListResourcesByConfigFileID)
-			configFiles.POST("", authMiddleware.GroupMember(middleware.FromPayload(configfile.CreateConfigFileInput{})), handlers_instance.ConfigFile.CreateConfigFileHandler)
+			configFiles.POST("", authMiddleware.GroupMember(middleware.FromProjectIDInPayload(configfile.CreateConfigFileInput{})), handlers_instance.ConfigFile.CreateConfigFileHandler)
 			configFiles.PUT("/:id", authMiddleware.GroupMember(middleware.FromIDParam(repos_instance.View.GetGroupIDByConfigFileID)), handlers_instance.ConfigFile.UpdateConfigFileHandler)
 			configFiles.DELETE("/:id", authMiddleware.GroupMember(middleware.FromIDParam(repos_instance.View.GetGroupIDByConfigFileID)), handlers_instance.ConfigFile.DeleteConfigFileHandler)
 		}

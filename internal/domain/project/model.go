@@ -13,7 +13,7 @@ const (
 
 // Project represents a user project with resource quotas
 type Project struct {
-	PID         uint      `gorm:"primaryKey;column:p_id"`
+	PID         uint      `gorm:"primaryKey;column:p_id;autoIncrement"`
 	ProjectName string    `gorm:"size:100;not null"`
 	Description string    `gorm:"type:text"`
 	GID         uint      `gorm:"not null"` // Group ID

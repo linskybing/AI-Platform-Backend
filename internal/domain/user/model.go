@@ -49,3 +49,8 @@ type UserWithSuperAdmin struct {
 	UpdatedAt    time.Time `gorm:"column:update_at" json:"UpdatedAt"`
 	IsSuperAdmin bool      `gorm:"column:is_super_admin" json:"IsSuperAdmin"`
 }
+
+// TableName specifies the table name for UserWithSuperAdmin
+func (UserWithSuperAdmin) TableName() string {
+	return "users"
+}

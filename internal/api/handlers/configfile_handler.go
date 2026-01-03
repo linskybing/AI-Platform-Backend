@@ -1,7 +1,9 @@
 package handlers
 
 import (
+	"fmt"
 	"net/http"
+	"os"
 
 	"github.com/gin-gonic/gin"
 	"github.com/linskybing/platform-go/internal/application"
@@ -76,9 +78,31 @@ func (h *ConfigFileHandler) GetConfigFileHandler(c *gin.Context) {
 func (h *ConfigFileHandler) CreateConfigFileHandler(c *gin.Context) {
 	var input configfile.CreateConfigFileInput
 	if err := c.ShouldBind(&input); err != nil {
-		c.JSON(http.StatusBadRequest, response.ErrorResponse{Error: err.Error()})
+		// Log the raw request for debugging
+		fmt.Fprintf(os.Stderr, "DEBUG CreateConfigFile: ShouldBind failed. Error: %v\n", err)
+		fmt.Fprintf(os.Stderr, "DEBUG CreateConfigFile: Content-Type: %s\n", c.GetHeader("Content-Type"))
+		c.JSON(http.StatusBadRequest, response.ErrorResponse{Error: fmt.Sprintf("Invalid input: %v", err)})
 		return
 	}
+
+	// Log received input for debugging
+	fmt.Fprintf(os.Stderr, "DEBUG CreateConfigFile: Received input - Filename: %s, ProjectID: %d, RawYaml length: %d\n",
+		input.Filename, input.ProjectID, len(input.RawYaml))
+
+	// Additional validation
+	if input.Filename == "" {
+		c.JSON(http.StatusBadRequest, response.ErrorResponse{Error: "filename is required"})
+		return
+	}
+	if input.RawYaml == "" {
+		c.JSON(http.StatusBadRequest, response.ErrorResponse{Error: "raw_yaml is required"})
+		return
+	}
+	if input.ProjectID == 0 {
+		c.JSON(http.StatusBadRequest, response.ErrorResponse{Error: "project_id is required and must be greater than 0"})
+		return
+	}
+
 	configFile, err := h.svc.CreateConfigFile(c, input)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, response.ErrorResponse{Error: err.Error()})

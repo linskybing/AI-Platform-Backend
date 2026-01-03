@@ -3,7 +3,9 @@ package application
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/linskybing/platform-go/internal/config"
@@ -11,6 +13,7 @@ import (
 	"github.com/linskybing/platform-go/internal/domain/view"
 	"github.com/linskybing/platform-go/internal/repository"
 	"github.com/linskybing/platform-go/pkg/utils"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
 var ErrProjectNotFound = errors.New("project not found")
@@ -88,12 +91,30 @@ func (s *ProjectService) CreateProject(c *gin.Context, input project.CreateProje
 		p.MPSMemory = *input.MPSMemory
 	}
 	err := s.Repos.Project.CreateProject(p)
-	err = s.AllocateProjectResources(p.PID)
-	if err == nil {
-		go utils.LogAuditWithConsole(c, "create", "project", fmt.Sprintf("p_id=%d", p.PID), nil, p, "", s.Repos.Audit)
+	if err != nil {
+		return nil, err
 	}
 
-	return p, err
+	// Sanity check: Verify GORM properly populated the PID
+	if p.PID == 0 {
+		fmt.Fprintf(os.Stderr, "ERROR CreateProject: GORM did not populate p.PID after CREATE. This indicates a database or driver issue.\n")
+		return nil, errors.New("failed to get project ID from database")
+	}
+
+	err = s.AllocateProjectResources(p.PID)
+	if err != nil {
+		// Resource allocation failed. Delete the project to maintain consistency.
+		// This ensures the project doesn't exist in a partially-initialized state.
+		if delErr := s.Repos.Project.DeleteProject(p.PID); delErr != nil {
+			// Log but don't overwrite the original error
+			fmt.Fprintf(os.Stderr, "ERROR: Failed to clean up project %d after AllocateProjectResources failed: %v\n", p.PID, delErr)
+		}
+		return nil, fmt.Errorf("failed to allocate project resources: %w", err)
+	}
+
+	go utils.LogAuditWithConsole(c, "create", "project", fmt.Sprintf("p_id=%d", p.PID), nil, p, "", s.Repos.Audit)
+
+	return p, nil
 }
 
 func (s *ProjectService) UpdateProject(c *gin.Context, id uint, input project.UpdateProjectDTO) (*project.Project, error) {
@@ -154,6 +175,35 @@ func (s *ProjectService) ListProjects() ([]project.Project, error) {
 }
 
 func (s *ProjectService) AllocateProjectResources(projectID uint) error {
+	// Ensure project-level shared storage hub (namespace + NFS gateway) exists
+	project, err := s.Repos.Project.GetProjectByID(projectID)
+	if err != nil {
+		return err
+	}
+
+	projectNamespace := utils.GenerateSafeResourceName("project", project.ProjectName, project.PID)
+	pvcName := fmt.Sprintf("project-%d-disk", projectID)
+
+	if err := utils.CreateNamespace(projectNamespace); err != nil {
+		if !strings.Contains(strings.ToLower(err.Error()), "already exist") {
+			return fmt.Errorf("failed to create project namespace: %w", err)
+		}
+	}
+
+	if err := utils.CreateHubPVC(projectNamespace, pvcName, config.DefaultStorageClassName, config.UserPVSize); err != nil {
+		if !apierrors.IsAlreadyExists(err) {
+			return fmt.Errorf("failed to create project hub pvc: %w", err)
+		}
+	}
+
+	if err := utils.CreateNFSDeployment(projectNamespace, pvcName); err != nil {
+		return fmt.Errorf("failed to create project nfs deployment: %w", err)
+	}
+
+	if err := utils.CreateNFSServiceWithName(projectNamespace, config.ProjectNfsServiceName); err != nil {
+		return fmt.Errorf("failed to create project nfs service: %w", err)
+	}
+
 	users, err := s.Repos.View.ListUsersByProjectID(projectID)
 	if err != nil {
 		return err

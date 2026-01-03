@@ -21,7 +21,7 @@ func NewProjectHandler(svc *application.ProjectService) *ProjectHandler {
 }
 
 // GetProjects godoc
-// @Summary List all projects
+// @Summary List projects for current user
 // @Tags projects
 // @Security BearerAuth
 // @Produce json
@@ -29,12 +29,44 @@ func NewProjectHandler(svc *application.ProjectService) *ProjectHandler {
 // @Failure 500 {object} response.ErrorResponse
 // @Router /projects [get]
 func (h *ProjectHandler) GetProjects(c *gin.Context) {
-	projects, err := h.svc.ListProjects()
+	userID, err := utils.GetUserIDFromContext(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, response.ErrorResponse{Error: "invalid user"})
+		return
+	}
+
+	// Get project views for this user
+	projectViews, err := h.svc.GetProjectsByUser(userID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, response.ErrorResponse{Error: err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, projects)
+
+	// Return empty array if no projects
+	if len(projectViews) == 0 {
+		c.JSON(http.StatusOK, []project.Project{})
+		return
+	}
+
+	// Get full project details for each project ID
+	result := make([]project.Project, 0, len(projectViews))
+	seenPIDs := make(map[uint]bool)
+
+	for _, pv := range projectViews {
+		// Avoid duplicates (user might be in multiple groups for same project)
+		if seenPIDs[pv.PID] {
+			continue
+		}
+		seenPIDs[pv.PID] = true
+
+		// Get full project details from repository
+		fullProject, err := h.svc.GetProject(pv.PID)
+		if err == nil {
+			result = append(result, *fullProject)
+		}
+	}
+
+	c.JSON(http.StatusOK, result)
 }
 
 // GetProjectsByUser godoc
@@ -59,6 +91,11 @@ func (h *ProjectHandler) GetProjectsByUser(c *gin.Context) {
 	}
 
 	grouped := h.svc.GroupProjectsByGID(records)
+
+	// Return empty object if no projects
+	if grouped == nil {
+		grouped = make(map[string]map[string]interface{})
+	}
 
 	c.JSON(http.StatusOK, grouped)
 }

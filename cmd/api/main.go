@@ -6,9 +6,52 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/linskybing/platform-go/internal/api/middleware"
 	"github.com/linskybing/platform-go/internal/api/routes"
+	"github.com/linskybing/platform-go/internal/config"
+	"github.com/linskybing/platform-go/internal/config/db"
+	"github.com/linskybing/platform-go/internal/domain/audit"
+	"github.com/linskybing/platform-go/internal/domain/configfile"
+	"github.com/linskybing/platform-go/internal/domain/form"
+	"github.com/linskybing/platform-go/internal/domain/gpu"
+	"github.com/linskybing/platform-go/internal/domain/group"
+	"github.com/linskybing/platform-go/internal/domain/job"
+	"github.com/linskybing/platform-go/internal/domain/project"
+	"github.com/linskybing/platform-go/internal/domain/resource"
+	"github.com/linskybing/platform-go/internal/domain/user"
+	"github.com/linskybing/platform-go/pkg/k8s"
 )
 
 func main() {
+	// Load configuration from environment variables and .env file
+	config.LoadConfig()
+
+	// Initialize JWT signing key
+	middleware.Init()
+
+	// Initialize Kubernetes scheme (register API types)
+	config.InitK8sConfig()
+
+	// Initialize database connection
+	db.Init()
+
+	// Initialize Kubernetes client
+	k8s.Init()
+
+	// Auto migrate database schemas
+	if err := db.DB.AutoMigrate(
+		&user.User{},
+		&group.Group{},
+		&group.UserGroup{},
+		&project.Project{},
+		&configfile.ConfigFile{},
+		&resource.Resource{},
+		&job.Job{},
+		&form.Form{},
+		&audit.AuditLog{},
+		&gpu.GPURequest{},
+	); err != nil {
+		log.Fatalf("Failed to migrate database: %v", err)
+	}
+
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.Default()
 
@@ -17,7 +60,7 @@ func main() {
 
 	routes.RegisterRoutes(router)
 
-	port := ":8080"
+	port := ":" + config.ServerPort
 	log.Printf("Starting API server on %s", port)
 	if err := router.Run(port); err != nil {
 		log.Fatalf("Failed to start: %v", err)

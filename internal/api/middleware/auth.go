@@ -50,6 +50,31 @@ func FromPayload(dtoType any) GIDExtractor {
 	}
 }
 
+// FromProjectIDInPayload creates an extractor that gets GID from ProjectID in payload
+func FromProjectIDInPayload(dtoType any) GIDExtractor {
+	return func(c *gin.Context, repos *repository.Repos) (uint, error) {
+		// Dynamically create a new DTO instance
+		dtoValue := reflect.New(reflect.TypeOf(dtoType)).Interface()
+
+		// Bind form data directly
+		if err := c.ShouldBind(dtoValue); err != nil {
+			return 0, err
+		}
+
+		// Check if DTO has GetProjectID method
+		type ProjectIDGetter interface {
+			GetProjectID() uint
+		}
+
+		if getter, ok := dtoValue.(ProjectIDGetter); ok {
+			projectID := getter.GetProjectID()
+			// Get GID from ProjectID
+			return repos.Project.GetGroupIDByProjectID(projectID)
+		}
+		return 0, errors.New("DTO does not implement GetProjectID")
+	}
+}
+
 // FromIDParam creates an extractor that gets group ID from URL parameter
 func FromIDParam(lookup func(uint) (uint, error)) GIDExtractor {
 	return func(c *gin.Context, repos *repository.Repos) (uint, error) {

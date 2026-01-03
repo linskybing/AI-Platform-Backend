@@ -142,16 +142,36 @@ func (s *UserGroupService) FormatByUID(records []group.UserGroup) map[uint]map[s
 	result := make(map[uint]map[string]interface{})
 
 	for _, r := range records {
-		if g, exists := result[r.UID]; exists {
-			// Convert to map[string]interface{} for flexibility
-			g["gid"] = r.GID
-			g["role"] = r.Role
-			result[r.UID] = g
+		// Get group name for this group
+		groupData, err := s.Repos.Group.GetGroupByID(r.GID)
+		groupName := ""
+		if err == nil {
+			groupName = groupData.GroupName
+		}
+
+		groupInfo := map[string]interface{}{
+			"GID":       r.GID,
+			"GroupName": groupName,
+			"Role":      r.Role,
+		}
+
+		if u, exists := result[r.UID]; exists {
+			// Append to existing groups array
+			groups := u["Groups"].([]map[string]interface{})
+			groups = append(groups, groupInfo)
+			u["Groups"] = groups
 		} else {
+			// Get username
+			username, err := s.Repos.User.GetUsernameByID(r.UID)
+			if err != nil {
+				username = "" // If we can't get the username, use empty string
+			}
+
+			// Create new entry with groups array
 			result[r.UID] = map[string]interface{}{
-				"uid":  r.UID,
-				"gid":  r.GID,
-				"role": r.Role,
+				"UID":      r.UID,
+				"UserName": username,
+				"Groups":   []map[string]interface{}{groupInfo},
 			}
 		}
 	}
@@ -162,15 +182,36 @@ func (s *UserGroupService) FormatByGID(records []group.UserGroup) map[uint]map[s
 	result := make(map[uint]map[string]interface{})
 
 	for _, r := range records {
+		// Get username for this user
+		username, err := s.Repos.User.GetUsernameByID(r.UID)
+		if err != nil {
+			username = "" // If we can't get the username, use empty string
+		}
+
+		userInfo := map[string]interface{}{
+			"UID":      r.UID,
+			"Username": username,
+			"Role":     r.Role,
+		}
+
 		if g, exists := result[r.GID]; exists {
-			g["uid"] = r.UID
-			g["role"] = r.Role
-			result[r.GID] = g
+			// Append to existing users array
+			users := g["Users"].([]map[string]interface{})
+			users = append(users, userInfo)
+			g["Users"] = users
 		} else {
+			// Get group name
+			groupData, err := s.Repos.Group.GetGroupByID(r.GID)
+			groupName := ""
+			if err == nil {
+				groupName = groupData.GroupName
+			}
+
+			// Create new entry with users array
 			result[r.GID] = map[string]interface{}{
-				"gid":  r.GID,
-				"uid":  r.UID,
-				"role": r.Role,
+				"GID":       r.GID,
+				"GroupName": groupName,
+				"Users":     []map[string]interface{}{userInfo},
 			}
 		}
 	}

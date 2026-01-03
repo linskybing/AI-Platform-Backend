@@ -92,6 +92,7 @@ type CreateProjectStorageRequest struct {
 	ProjectID    uint   `json:"project_id"`
 	ProjectName  string `json:"project_name"`
 	Capacity     int    `json:"capacity"`
+	Name         string `json:"name"`
 	StorageClass string `json:"storage_class"`
 }
 
@@ -106,4 +107,5 @@ type ProjectPVCOutput struct {
 	Status      string    `json:"status"`
 	AccessMode  string    `json:"access_mode"`
 	CreatedAt   time.Time `json:"created_at"`
+	Role        string    `json:"role"`
 }

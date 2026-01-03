@@ -12,6 +12,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/linskybing/platform-go/internal/application"
+	"github.com/linskybing/platform-go/internal/config"
 	"github.com/linskybing/platform-go/internal/domain/job"
 	"github.com/linskybing/platform-go/pkg/response"
 	"github.com/linskybing/platform-go/pkg/types"
@@ -653,6 +654,7 @@ func (h *K8sHandler) GetUserProjectStorages(c *gin.Context) {
 	for _, s := range allStorages {
 		// Check if the project ID exists in our role map
 		if _, exists := userProjectRoles[s.ProjectID]; exists {
+			role := userProjectRoles[s.ProjectID]
 			output := job.ProjectPVCOutput{
 				ID:          s.ID,
 				ProjectID:   s.ProjectID,
@@ -663,6 +665,7 @@ func (h *K8sHandler) GetUserProjectStorages(c *gin.Context) {
 				Status:      s.Status,
 				AccessMode:  s.AccessMode,
 				CreatedAt:   s.CreatedAt,
+				Role:        role,
 			}
 			userStorages = append(userStorages, output)
 		}
@@ -702,10 +705,22 @@ func (h *K8sHandler) CreateProjectStorage(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
 	defer cancel()
 
+	// 2.5 Ensure project hub (namespace + NFS gateway) exists similar to mydrive init
+	project, err := h.ProjectService.GetProject(req.ProjectID)
+	if err != nil || project == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Project not found"})
+		return
+	}
+	if err := h.K8sService.EnsureProjectHub(project); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to ensure project storage hub", "details": err.Error()})
+		return
+	}
+
 	// 3. Convert request to VolumeSpec
 	volumeSpec := job.VolumeSpec{
 		ProjectID:        req.ProjectID,
 		ProjectName:      req.ProjectName,
+		Name:             req.Name,
 		Size:             fmt.Sprintf("%dGi", req.Capacity),
 		StorageClassName: req.StorageClass,
 	}
@@ -770,15 +785,11 @@ func (h *K8sHandler) ProjectStorageProxy(c *gin.Context) {
 	// 1. Reconstruct Namespace (Matches your previous logic)
 	targetNamespace := utils.GenerateSafeResourceName("project", project.ProjectName, project.PID)
 
-	// 2. Reconstruct Service Name
-	// English Comment: Based on your kubectl output, the service name follows the pattern:
-	// "filebrowser-" + pvcName + "-svc"
-	// Assuming your PVC name follows: "pvc-" + targetNamespace
-	pvcName := fmt.Sprintf("pvc-%s", targetNamespace)
-	serviceName := fmt.Sprintf("filebrowser-%s-svc", pvcName)
+	// 2. Use the new shared service name (PVC-agnostic)
+	serviceName := config.ProjectStorageServiceName
 
 	// 3. Construct the internal K8s Cluster DNS URL
-	// targetURL will now be: http://filebrowser-pvc-project-test-b1f7f5-svc.project-test-b1f7f5.svc.cluster.local:80
+	// targetURL will now be: http://filebrowser-project-svc.<namespace>.svc.cluster.local:80
 	targetURL := fmt.Sprintf("http://%s.%s.svc.cluster.local:80", serviceName, targetNamespace)
 
 	remote, err := url.Parse(targetURL)
@@ -833,17 +844,41 @@ func (h *K8sHandler) StartProjectFileBrowser(c *gin.Context) {
 		return
 	}
 
-	// 2. Permission Logic: Only higher roles get Write access
-	isReadOnly := !(role == "admin" || role == "manager")
+	// Normalize role for comparison (DB may return mixed-case values)
+	normalizedRole := strings.ToLower(strings.TrimSpace(role))
+	if normalizedRole == "" {
+		normalizedRole = "user"
+	}
 
-	// 3. Metadata for K8s
-	project, _ := h.ProjectService.GetProject(uint(pID))
+	// 2. Permission Logic: Only higher roles get Write access
+	isReadOnly := !(normalizedRole == "admin" || normalizedRole == "manager")
+
+	// 3. Metadata for K8s & ensure project hub exists
+	project, err := h.ProjectService.GetProject(uint(pID))
+	if err != nil || project == nil {
+		c.JSON(http.StatusNotFound, response.ErrorResponse{Error: "Project not found"})
+		return
+	}
+	if err := h.K8sService.EnsureProjectHub(project); err != nil {
+		c.JSON(http.StatusInternalServerError, response.ErrorResponse{Error: "Failed to ensure project storage hub: " + err.Error()})
+		return
+	}
 	targetNamespace := utils.GenerateSafeResourceName("project", project.ProjectName, project.PID)
-	pvcName := fmt.Sprintf("pvc-%s", targetNamespace)
+
+	// 4. Collect all project PVCs in this namespace for multi-mount gateway
+	pvcNames, err := h.K8sService.GetProjectPVCNames(c.Request.Context(), targetNamespace)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, response.ErrorResponse{Error: "Failed to list project PVCs"})
+		return
+	}
+	if len(pvcNames) == 0 {
+		c.JSON(http.StatusNotFound, response.ErrorResponse{Error: "No project PVCs found"})
+		return
+	}
 
 	baseURL := fmt.Sprintf("/k8s/storage/projects/%d/proxy", pID)
-	// 4. Start FileBrowser with the calculated readOnly flag
-	_, err = h.K8sService.StartFileBrowser(c.Request.Context(), targetNamespace, pvcName, isReadOnly, baseURL)
+	// 5. Start FileBrowser with the calculated readOnly flag and all PVCs mounted
+	_, err = h.K8sService.StartFileBrowser(c.Request.Context(), targetNamespace, pvcNames, isReadOnly, baseURL)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, response.ErrorResponse{Error: err.Error()})
 		return
@@ -853,7 +888,7 @@ func (h *K8sHandler) StartProjectFileBrowser(c *gin.Context) {
 		Code:    0,
 		Message: "success",
 		Data: gin.H{
-			"role":     role,
+			"role":     normalizedRole,
 			"readOnly": isReadOnly,
 		},
 	})
@@ -876,9 +911,8 @@ func (h *K8sHandler) StopProjectFileBrowser(c *gin.Context) {
 	}
 
 	targetNamespace := utils.GenerateSafeResourceName("project", project.ProjectName, project.PID)
-	pvcName := fmt.Sprintf("pvc-%s", targetNamespace)
 
-	err = h.K8sService.StopFileBrowser(c.Request.Context(), targetNamespace, pvcName)
+	err = h.K8sService.StopFileBrowser(c.Request.Context(), targetNamespace)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, response.ErrorResponse{Error: err.Error()})
 		return

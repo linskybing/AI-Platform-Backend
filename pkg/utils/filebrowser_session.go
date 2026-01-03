@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/linskybing/platform-go/internal/config"
 	"github.com/linskybing/platform-go/pkg/k8s" // 假設這是你的 k8s client wrapper
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -175,7 +176,7 @@ func StartUserHubBrowser(ctx context.Context, username string) (string, error) {
 	ns := fmt.Sprintf("user-%s-storage", username)
 	appName := fmt.Sprintf("fb-hub-%s", username)
 	svcName := fmt.Sprintf("fb-hub-svc-%s", username)
-	nfsServiceName := "storage-svc"
+	nfsServiceName := config.PersonalStorageServiceName
 
 	nfsSvc, err := k8s.Clientset.CoreV1().Services(ns).Get(ctx, nfsServiceName, metav1.GetOptions{})
 	if err != nil {

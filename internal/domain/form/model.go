@@ -1,6 +1,7 @@
 package form
 
 import (
+	"github.com/linskybing/platform-go/internal/domain/project"
 	"github.com/linskybing/platform-go/internal/domain/user"
 	"gorm.io/gorm"
 )
@@ -16,10 +17,11 @@ const (
 
 type Form struct {
 	gorm.Model
-	UserID      uint       `json:"user_id"`
-	ProjectID   *uint      `json:"project_id"` // Optional
-	Title       string     `json:"title"`
-	Description string     `json:"description"`
-	Status      FormStatus `json:"status" gorm:"default:'Pending'"`
-	User        user.User  `json:"user" gorm:"foreignKey:UserID"`
+	UserID      uint             `json:"user_id"`
+	ProjectID   *uint            `json:"project_id"` // Optional
+	Title       string           `json:"title"`
+	Description string           `json:"description"`
+	Status      FormStatus       `json:"status" gorm:"default:'Pending'"`
+	User        user.User        `json:"user" gorm:"foreignKey:UserID"`
+	Project     *project.Project `json:"project" gorm:"foreignKey:ProjectID"`
 }

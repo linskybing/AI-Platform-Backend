@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/linskybing/platform-go/internal/config"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/api/core/v1"
@@ -24,6 +25,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
@@ -919,14 +921,61 @@ func CreateJob(ctx context.Context, spec JobSpec) error {
 	return err
 }
 
-// CreateFileBrowserPod creates a pod running filebrowser with optional read-only access
-func CreateFileBrowserPod(ctx context.Context, ns, pvcName string, readOnly bool, baseURL string) (string, error) {
-	podName := fmt.Sprintf("filebrowser-%s", pvcName)
+// CreateFileBrowserPod creates a pod running filebrowser with multiple PVC mounts.
+// Each PVC is mounted at /srv/<pvcName>. readOnly applies to all mounts.
+func CreateFileBrowserPod(ctx context.Context, ns string, pvcNames []string, readOnly bool, baseURL string) (string, error) {
+	if len(pvcNames) == 0 {
+		return "", fmt.Errorf("no PVCs provided for filebrowser")
+	}
+
+	podName := "filebrowser-project"
 
 	// Check if pod already exists
-	_, err := Clientset.CoreV1().Pods(ns).Get(ctx, podName, metav1.GetOptions{})
+	existingPod, err := Clientset.CoreV1().Pods(ns).Get(ctx, podName, metav1.GetOptions{})
 	if err == nil {
-		return podName, nil // Already exists
+		// If existing pod readOnly setting matches desired, reuse it
+		matches := true
+		if len(existingPod.Spec.Containers) > 0 {
+			for _, m := range existingPod.Spec.Containers[0].VolumeMounts {
+				if m.ReadOnly != readOnly {
+					matches = false
+					break
+				}
+			}
+		}
+
+		if matches {
+			return podName, nil // Already exists with correct access mode
+		}
+
+		// Otherwise, delete and recreate to apply new readOnly flag
+		grace := int64(0)
+		_ = Clientset.CoreV1().Pods(ns).Delete(ctx, podName, metav1.DeleteOptions{GracePeriodSeconds: &grace})
+		_ = wait.PollImmediate(200*time.Millisecond, 5*time.Second, func() (bool, error) {
+			_, err := Clientset.CoreV1().Pods(ns).Get(ctx, podName, metav1.GetOptions{})
+			if apierrors.IsNotFound(err) {
+				return true, nil
+			}
+			return false, nil
+		})
+	}
+
+	// Build volumes and mounts per PVC
+	var volumes []corev1.Volume
+	var mounts []corev1.VolumeMount
+	for idx, pvc := range pvcNames {
+		volName := fmt.Sprintf("data-%d", idx)
+		volumes = append(volumes, corev1.Volume{
+			Name: volName,
+			VolumeSource: corev1.VolumeSource{
+				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: pvc},
+			},
+		})
+		mounts = append(mounts, corev1.VolumeMount{
+			Name:      volName,
+			MountPath: fmt.Sprintf("/srv/%s", pvc),
+			ReadOnly:  readOnly,
+		})
 	}
 
 	pod := &corev1.Pod{
@@ -934,8 +983,8 @@ func CreateFileBrowserPod(ctx context.Context, ns, pvcName string, readOnly bool
 			Name:      podName,
 			Namespace: ns,
 			Labels: map[string]string{
-				"app": "filebrowser",
-				"pvc": pvcName,
+				"app":  "filebrowser",
+				"role": "project-storage",
 			},
 		},
 		Spec: corev1.PodSpec{
@@ -943,7 +992,6 @@ func CreateFileBrowserPod(ctx context.Context, ns, pvcName string, readOnly bool
 				{
 					Name:  "filebrowser",
 					Image: "filebrowser/filebrowser:latest",
-					// Use --baseurl if needed for reverse proxy compatibility
 					Args: []string{
 						"--noauth",
 						"--database", "/tmp/filebrowser.db",
@@ -952,28 +1000,11 @@ func CreateFileBrowserPod(ctx context.Context, ns, pvcName string, readOnly bool
 						"--address", "0.0.0.0",
 						"--baseURL", baseURL,
 					},
-					Ports: []corev1.ContainerPort{
-						{ContainerPort: 8080},
-					},
-					VolumeMounts: []corev1.VolumeMount{
-						{
-							Name:      "data",
-							MountPath: "/srv",
-							ReadOnly:  readOnly, // Set based on user role
-						},
-					},
+					Ports:        []corev1.ContainerPort{{ContainerPort: 80}},
+					VolumeMounts: mounts,
 				},
 			},
-			Volumes: []corev1.Volume{
-				{
-					Name: "data",
-					VolumeSource: corev1.VolumeSource{
-						PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-							ClaimName: pvcName,
-						},
-					},
-				},
-			},
+			Volumes: volumes,
 		},
 	}
 
@@ -985,8 +1016,8 @@ func CreateFileBrowserPod(ctx context.Context, ns, pvcName string, readOnly bool
 }
 
 // CreateFileBrowserService creates a service for filebrowser
-func CreateFileBrowserService(ctx context.Context, ns, pvcName string) (string, error) {
-	svcName := fmt.Sprintf("filebrowser-%s-svc", pvcName)
+func CreateFileBrowserService(ctx context.Context, ns string) (string, error) {
+	svcName := config.ProjectStorageServiceName
 
 	// Check if service already exists
 	svc, err := Clientset.CoreV1().Services(ns).Get(ctx, svcName, metav1.GetOptions{})
@@ -1005,8 +1036,8 @@ func CreateFileBrowserService(ctx context.Context, ns, pvcName string) (string, 
 		},
 		Spec: corev1.ServiceSpec{
 			Selector: map[string]string{
-				"app": "filebrowser",
-				"pvc": pvcName,
+				"app":  "filebrowser",
+				"role": "project-storage",
 			},
 			Type: corev1.ServiceTypeNodePort,
 			Ports: []corev1.ServicePort{
@@ -1031,9 +1062,9 @@ func CreateFileBrowserService(ctx context.Context, ns, pvcName string) (string, 
 }
 
 // DeleteFileBrowserResources deletes the pod and service
-func DeleteFileBrowserResources(ctx context.Context, ns, pvcName string) error {
-	podName := fmt.Sprintf("filebrowser-%s", pvcName)
-	svcName := fmt.Sprintf("filebrowser-%s-svc", pvcName)
+func DeleteFileBrowserResources(ctx context.Context, ns string) error {
+	podName := "filebrowser-project"
+	svcName := config.ProjectStorageServiceName
 
 	// Delete Service
 	err := Clientset.CoreV1().Services(ns).Delete(ctx, svcName, metav1.DeleteOptions{})

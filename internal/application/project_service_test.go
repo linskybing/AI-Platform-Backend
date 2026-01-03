@@ -57,7 +57,10 @@ func TestProjectServiceCRUD(t *testing.T) {
 	t.Run("CreateProject success", func(t *testing.T) {
 		input := project.CreateProjectDTO{ProjectName: "proj1", GID: 1}
 
-		mockProject.EXPECT().CreateProject(gomock.Any()).Return(nil)
+		mockProject.EXPECT().CreateProject(gomock.Any()).Do(func(p *project.Project) {
+			// Simulate GORM's behavior of setting the PID after successful CREATE
+			p.PID = 1
+		}).Return(nil)
 
 		project, err := svc.CreateProject(c, input)
 		if err != nil {
@@ -65,6 +68,27 @@ func TestProjectServiceCRUD(t *testing.T) {
 		}
 		if project.ProjectName != "proj1" {
 			t.Fatalf("expected proj1, got %s", project.ProjectName)
+		}
+		if project.PID != 1 {
+			t.Fatalf("expected PID 1, got %d", project.PID)
+		}
+	})
+
+	t.Run("CreateProject error handling", func(t *testing.T) {
+		input := project.CreateProjectDTO{ProjectName: "proj2", GID: 1}
+		expectedErr := errors.New("database error")
+
+		mockProject.EXPECT().CreateProject(gomock.Any()).Return(expectedErr)
+
+		project, err := svc.CreateProject(c, input)
+		if err == nil {
+			t.Fatalf("expected error, got nil")
+		}
+		if err.Error() != "database error" {
+			t.Fatalf("expected 'database error', got %v", err)
+		}
+		if project != nil {
+			t.Fatalf("expected nil project on error, got %v", project)
 		}
 	})
 

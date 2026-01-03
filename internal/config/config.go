@@ -7,7 +7,9 @@ import (
 
 	"github.com/joho/godotenv"
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
@@ -32,6 +34,10 @@ var (
 	DefaultStorageClassName = "longhorn"
 	DefaultStorageSize      = "3Gi"
 	UserPVSize              = "50Gi"
+	// K8s Service Names
+	PersonalStorageServiceName string
+	ProjectStorageServiceName  string
+	ProjectNfsServiceName      string
 )
 
 func LoadConfig() {
@@ -54,6 +60,11 @@ func LoadConfig() {
 	MinioSecretKey = getEnv("MINIO_SECRET_KEY", "minio123")
 	MinioBucket = getEnv("MINIO_BUCKET", "platform-bucket")
 	MinioUseSSL, _ = strconv.ParseBool(getEnv("MINIO_USE_SSL", "true"))
+
+	// K8s Service Names
+	PersonalStorageServiceName = getEnv("PERSONAL_STORAGE_SERVICE_NAME", "storage-svc")
+	ProjectStorageServiceName = getEnv("PROJECT_STORAGE_SERVICE_NAME", "filebrowser-project-svc")
+	ProjectNfsServiceName = getEnv("PROJECT_NFS_SERVICE_NAME", "project-nfs-svc")
 }
 
 func getEnv(key, fallback string) string {
@@ -64,6 +75,9 @@ func getEnv(key, fallback string) string {
 }
 
 func InitK8sConfig() {
+	// Register core Kubernetes API types
 	_ = corev1.AddToScheme(Scheme)
 	_ = appsv1.AddToScheme(Scheme)
+	_ = batchv1.AddToScheme(Scheme)
+	_ = networkingv1.AddToScheme(Scheme)
 }

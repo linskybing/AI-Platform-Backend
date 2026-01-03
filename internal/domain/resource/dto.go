@@ -1,8 +1,9 @@
 package resource
 
 import (
-	"gorm.io/datatypes"
 	"time"
+
+	"gorm.io/datatypes"
 )
 
 type ResourceUpdateDTO struct {
@@ -62,6 +63,7 @@ type CreateProjectStorageRequest struct {
 	ProjectID   uint   `json:"projectId" binding:"required"`
 	ProjectName string `json:"projectName" binding:"required"`
 	Capacity    int    `json:"capacity" binding:"required,min=1"` // In Gi
+	Name        string `json:"name" binding:"required"`
 }
 
 // ProjectPVCOutput defines the response structure for listing storages.

@@ -4,7 +4,6 @@ import (
 	"errors"
 
 	"github.com/linskybing/platform-go/internal/config/db"
-	"github.com/linskybing/platform-go/internal/domain/user"
 	"github.com/linskybing/platform-go/internal/domain/view"
 	"gorm.io/gorm"
 )
@@ -51,7 +50,7 @@ func (r *DBViewRepo) GetGroupIDByResourceID(rID uint) (uint, error) {
 	err := db.DB.Table("resources r").
 		Select("p.g_id").
 		Joins("JOIN config_files cf ON cf.cf_id = r.cf_id").
-		Joins("JOIN projects p ON cf.project_id = p.p_id").
+		Joins("JOIN project_list p ON cf.project_id = p.p_id").
 		Where("r.r_id = ?", rID).
 		Take(&res).Error
 
@@ -74,7 +73,7 @@ func (r *DBViewRepo) GetGroupIDByConfigFileID(cfID uint) (uint, error) {
 
 	err := db.DB.Table("config_files cf").
 		Select("p.g_id").
-		Joins("JOIN projects p ON cf.project_id = p.p_id").
+		Joins("JOIN project_list p ON cf.project_id = p.p_id").
 		Where("cf.cf_id = ?", cfID).
 		Take(&res).Error
 
@@ -116,15 +115,30 @@ func (r *DBViewRepo) ListProjectsByUserID(userID uint) ([]view.ProjectUserView, 
 
 // GetUserRoleInGroup fetches the role of a user in a specific group.
 func (r *DBViewRepo) GetUserRoleInGroup(uid uint, gid uint) (string, error) {
-	var role string
-	// Query the user_group table directly
-	err := db.DB.Model(&user.User{}).
-		Select("role_level").
-		Where("u_id = ? AND g_id = ?", uid, gid).
-		First(&role).Error
+	roles := []string{}
 
+	// Prefer "role" column
+	err := db.DB.Table("user_group").
+		Where("u_id = ? AND g_id = ?", uid, gid).
+		Pluck("role", &roles).Error
 	if err != nil {
 		return "", err
 	}
-	return role, nil
+	if len(roles) > 0 {
+		return roles[0], nil
+	}
+
+	// Fallback to legacy "role_level" column if present
+	roles = []string{}
+	err = db.DB.Table("user_group").
+		Where("u_id = ? AND g_id = ?", uid, gid).
+		Pluck("role_level", &roles).Error
+	if err != nil {
+		return "", err
+	}
+	if len(roles) > 0 {
+		return roles[0], nil
+	}
+
+	return "", gorm.ErrRecordNotFound
 }

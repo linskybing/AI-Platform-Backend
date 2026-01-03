@@ -33,7 +33,23 @@ func (r *DBProjectRepo) GetGroupIDByProjectID(pID uint) (uint, error) {
 }
 
 func (r *DBProjectRepo) CreateProject(p *project.Project) error {
-	return db.DB.Create(p).Error
+	if err := db.DB.Create(p).Error; err != nil {
+		return err
+	}
+
+	// CRITICAL: Re-fetch from database to ensure we have the correct PID
+	// In some cases, GORM's RETURNING clause doesn't populate p.PID correctly
+	// This guarantees we return the actual database-generated ID
+	var created project.Project
+	if err := db.DB.Where("project_name = ? AND g_id = ?", p.ProjectName, p.GID).
+		Order("create_at DESC"). // Use create_at to get the most recent one
+		First(&created).Error; err != nil {
+		return err
+	}
+
+	// Update the pointer with the correct PID from database
+	p.PID = created.PID
+	return nil
 }
 
 func (r *DBProjectRepo) UpdateProject(p *project.Project) error {

@@ -276,6 +276,12 @@ func (s *ConfigFileService) CreateInstance(c *gin.Context, id uint) error {
 	// Example: "proj-1-john-doe"
 	ns := utils.FormatNamespaceName(configfile.ProjectID, safeUsername)
 
+	// Fetch project info early for namespace derivation and permission checks
+	project, err := s.Repos.Project.GetProjectByID(configfile.ProjectID)
+	if err != nil {
+		return err
+	}
+
 	// Calculate the user's storage namespace where the NFS service resides.
 	// Example: "user-john-doe-storage"
 	userStorageNamespace := fmt.Sprintf("user-%s-storage", safeUsername)
@@ -285,7 +291,7 @@ func (s *ConfigFileService) CreateInstance(c *gin.Context, id uint) error {
 	// -------------------------------------------------------------------------
 	// Default to the internal DNS name. This acts as a fallback if the lookup fails
 	// or if the service is in a different cluster.
-	nfsServerAddress := fmt.Sprintf("storage-svc.%s.svc.cluster.local", userStorageNamespace)
+	nfsServerAddress := fmt.Sprintf("%s.%s.svc.cluster.local", config.PersonalStorageServiceName, userStorageNamespace)
 
 	// Attempt to resolve the ClusterIP of the NFS service directly.
 	// This is critical for environments like Docker Desktop where internal K8s DNS
@@ -294,7 +300,7 @@ func (s *ConfigFileService) CreateInstance(c *gin.Context, id uint) error {
 		// We use context.TODO() here, or you can inherit context from gin if available.
 		svc, err := k8s.Clientset.CoreV1().Services(userStorageNamespace).Get(
 			context.TODO(),
-			"storage-svc", // The fixed name of your NFS service
+			config.PersonalStorageServiceName, // The configured name of your NFS service
 			metav1.GetOptions{},
 		)
 
@@ -304,19 +310,42 @@ func (s *ConfigFileService) CreateInstance(c *gin.Context, id uint) error {
 		}
 	}
 
-	// 3. Check Project Permissions & ReadOnly Enforcement
-	project, err := s.Repos.Project.GetProjectByID(configfile.ProjectID)
-	if err != nil {
-		return err
+	// -------------------------------------------------------------------------
+	// Project Storage: Resolve Project NFS Service IP
+	// -------------------------------------------------------------------------
+	// For project storage, the NFS service resides in the project namespace.
+	// Use the same namespace scheme as project resources (e.g., GenerateSafeResourceName).
+	projectNamespace := utils.GenerateSafeResourceName("project", project.ProjectName, project.PID)
+	projectNfsServerAddress := ""
+
+	// Prefer direct ClusterIP lookup (same pattern as personal NFS)
+	if k8s.Clientset != nil {
+		svc, err := k8s.Clientset.CoreV1().Services(projectNamespace).Get(
+			context.TODO(),
+			config.ProjectNfsServiceName, // The configured name of your project NFS service
+			metav1.GetOptions{},
+		)
+
+		if err == nil && svc.Spec.ClusterIP != "" {
+			projectNfsServerAddress = svc.Spec.ClusterIP
+		}
 	}
 
+	// Fallback to cluster DNS name if ClusterIP not resolved
+	if projectNfsServerAddress == "" {
+		projectNfsServerAddress = fmt.Sprintf("%s.%s.svc.cluster.local", config.ProjectNfsServiceName, projectNamespace)
+	}
+
+	// 3. Check Project Permissions & ReadOnly Enforcement
 	shouldEnforceRO := false
 	if !claims.IsAdmin {
 		ug, err := s.Repos.UserGroup.GetUserGroup(claims.UserID, project.GID)
 		if err != nil {
 			return err
 		}
-		if ug.Role == "user" {
+		// Only enforce readonly if user is NOT manager/admin/owner
+		// Manager and above can write to project storage
+		if ug.Role != "manager" && ug.Role != "admin" && ug.Role != "owner" {
 			shouldEnforceRO = true
 		}
 	}
@@ -339,8 +368,11 @@ func (s *ConfigFileService) CreateInstance(c *gin.Context, id uint) error {
 		// The target namespace for deployment.
 		"namespace": ns,
 
-		// The resolved NFS server address (IP or DNS).
+		// The resolved NFS server address (IP or DNS) for personal storage.
 		"nfsServer": nfsServerAddress,
+
+		// The resolved NFS server address (IP or DNS) for project storage.
+		"projectNfsServer": projectNfsServerAddress,
 
 		// The namespace where user storage is located.
 		"userStorageNamespace": userStorageNamespace,
@@ -361,6 +393,12 @@ func (s *ConfigFileService) CreateInstance(c *gin.Context, id uint) error {
 		}
 
 		jsonBytes := []byte(replacedJSON)
+
+		// Normalize NFS servers: if path points to project storage (/srv/...), force project NFS server
+		jsonBytes, err = s.rewriteNfsServers(jsonBytes, nfsServerAddress, projectNfsServerAddress)
+		if err != nil {
+			return err
+		}
 
 		// Apply ReadOnly restrictions if necessary
 		if shouldEnforceRO {
@@ -415,17 +453,18 @@ func (s *ConfigFileService) enforceReadOnly(jsonBytes []byte) ([]byte, error) {
 		return jsonBytes, nil
 	}
 
-	// Find volumes
+	// Find volumes and identify which are PVCs vs NFS
 	volumes, ok := podSpec["volumes"].([]interface{})
 	if !ok {
 		return jsonBytes, nil
 	}
 
-	// Map volume name to PVC name
+	// Map volume name to PVC claim name
 	pvcVolumes := make(map[string]string)
 	for _, v := range volumes {
 		if vol, ok := v.(map[string]interface{}); ok {
 			if name, ok := vol["name"].(string); ok {
+				// Check if it's a PVC volume
 				if pvc, ok := vol["persistentVolumeClaim"].(map[string]interface{}); ok {
 					if claimName, ok := pvc["claimName"].(string); ok {
 						pvcVolumes[name] = claimName
@@ -441,28 +480,93 @@ func (s *ConfigFileService) enforceReadOnly(jsonBytes []byte) ([]byte, error) {
 		return jsonBytes, nil
 	}
 
-	// Inject MPS Annotations if Project ID is available
-	// Note: This requires passing Project ID to this function or fetching it
-	// For now, we assume the caller handles annotation injection or we do it here if we have context
-
 	for _, c := range containers {
 		if container, ok := c.(map[string]interface{}); ok {
-			// ... existing volume logic ...
 			if mounts, ok := container["volumeMounts"].([]interface{}); ok {
 				for _, m := range mounts {
 					if mount, ok := m.(map[string]interface{}); ok {
 						if volName, ok := mount["name"].(string); ok {
-							if claimName, ok := pvcVolumes[volName]; ok {
-								// Check if it's the default project PVC
+							// Only set readonly for PVC volumes (project storage)
+							// NFS volumes (user storage) remain writable
+							if claimName, isPVC := pvcVolumes[volName]; isPVC {
+								// Don't set readonly for default user storage PVC
 								if claimName != config.DefaultStorageName {
 									mount["readOnly"] = true
 								}
 							}
+							// NFS volumes are never set to readonly here
 						}
 					}
 				}
 			}
 		}
+	}
+
+	return json.Marshal(obj)
+}
+
+// rewriteNfsServers ensures project mounts (path starts with /srv/) use the project NFS server.
+func (s *ConfigFileService) rewriteNfsServers(jsonBytes []byte, personalAddr, projectAddr string) ([]byte, error) {
+	var obj map[string]interface{}
+	if err := json.Unmarshal(jsonBytes, &obj); err != nil {
+		return nil, err
+	}
+
+	var podSpec map[string]interface{}
+
+	kind, _ := obj["kind"].(string)
+	if kind == "Pod" {
+		if spec, ok := obj["spec"].(map[string]interface{}); ok {
+			podSpec = spec
+		}
+	} else if kind == "Deployment" || kind == "StatefulSet" || kind == "DaemonSet" || kind == "Job" {
+		if spec, ok := obj["spec"].(map[string]interface{}); ok {
+			if template, ok := spec["template"].(map[string]interface{}); ok {
+				if tSpec, ok := template["spec"].(map[string]interface{}); ok {
+					podSpec = tSpec
+				}
+			}
+		}
+	}
+
+	if podSpec == nil {
+		return jsonBytes, nil
+	}
+
+	volumes, ok := podSpec["volumes"].([]interface{})
+	if !ok {
+		return jsonBytes, nil
+	}
+
+	for _, v := range volumes {
+		vol, ok := v.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		nfs, ok := vol["nfs"].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		path, _ := nfs["path"].(string)
+		server, _ := nfs["server"].(string)
+
+		// If path indicates project storage, force project server
+		if strings.HasPrefix(path, "/srv/") {
+			nfs["server"] = projectAddr
+			// Map to actual export root on gateway (storage-gateway exports /exports)
+			trimmed := strings.TrimPrefix(path, "/srv/")
+			nfs["path"] = "/exports/" + trimmed
+			// If subPath is empty, ensure it's relative pvc name (strip leading slash)
+			if subPath, ok := nfs["subPath"].(string); ok {
+				nfs["subPath"] = strings.TrimPrefix(subPath, "/")
+			}
+		} else {
+			// Default to personal server for everything else
+			nfs["server"] = personalAddr
+		}
+
+		// If legacy server value matched personal address but path is /srv, we already override
+		_ = server
 	}
 
 	return json.Marshal(obj)

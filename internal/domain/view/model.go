@@ -66,6 +66,9 @@ type ProjectUserView struct {
 	Username    string `gorm:"column:username" json:"Username"`
 }
 
+func (ProjectUserView) TableName() string {
+	return "project_user_views"
+}
 func (UserWithSuperAdmin) TableName() string {
 	return "users_with_superadmin"
 }

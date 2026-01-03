@@ -9,7 +9,7 @@ RUN go mod download
 COPY . .
 
 # Build the final static binary for Linux
-RUN CGO_ENABLED=0 GOOS=linux go build -o main src/main.go
+RUN CGO_ENABLED=0 GOOS=linux go build -o main ./cmd/api/main.go
 
 # --- Final Stage: Use a minimal base image ---
 FROM ubuntu:latest

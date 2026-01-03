@@ -10,10 +10,12 @@ import (
 
 	"github.com/linskybing/platform-go/internal/config"
 	"github.com/linskybing/platform-go/internal/domain/job"
+	"github.com/linskybing/platform-go/internal/domain/project"
 	"github.com/linskybing/platform-go/internal/repository"
 	"github.com/linskybing/platform-go/pkg/k8s"
 	"github.com/linskybing/platform-go/pkg/utils"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -213,6 +215,36 @@ func (s *K8sService) ListPVCs(ns string) ([]corev1.PersistentVolumeClaim, error)
 	return utils.ListPVCs(ns)
 }
 
+// GetProjectPVCNames returns PVC names within a namespace that are tagged as project storage.
+// Falls back to all PVCs if no labeled ones found for backward compatibility.
+func (s *K8sService) GetProjectPVCNames(ctx context.Context, namespace string) ([]string, error) {
+	// First try to find PVCs with the project storage label
+	list, err := k8s.Clientset.CoreV1().PersistentVolumeClaims(namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: "storage-type=project",
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	names := make([]string, 0, len(list.Items))
+	for _, pvc := range list.Items {
+		names = append(names, pvc.Name)
+	}
+
+	// If no labeled PVCs found, fall back to all PVCs in namespace for backward compatibility
+	if len(names) == 0 {
+		fallback, err := k8s.Clientset.CoreV1().PersistentVolumeClaims(namespace).List(ctx, metav1.ListOptions{})
+		if err == nil && len(fallback.Items) > 0 {
+			names = make([]string, 0, len(fallback.Items))
+			for _, pvc := range fallback.Items {
+				names = append(names, pvc.Name)
+			}
+		}
+	}
+
+	return names, nil
+}
+
 func (s *K8sService) CreatePVC(input job.VolumeSpec) error {
 	return utils.CreatePVC(input.Namespace, input.Name, input.StorageClassName, input.Size)
 }
@@ -226,16 +258,20 @@ func (s *K8sService) DeletePVC(ns, name string) error {
 }
 
 // StartFileBrowser provisions a FileBrowser instance with specific access permissions.
-func (s *K8sService) StartFileBrowser(ctx context.Context, ns, pvcName string, readOnly bool, baseURL string) (string, error) {
+// It mounts all provided PVCs under /srv/<pvcName>.
+func (s *K8sService) StartFileBrowser(ctx context.Context, ns string, pvcNames []string, readOnly bool, baseURL string) (string, error) {
+	if len(pvcNames) == 0 {
+		return "", fmt.Errorf("no PVCs available to start filebrowser")
+	}
+
 	// 1. Create Pod with dynamic read-only configuration
-	// Note: You need to update CreateFileBrowserPod to accept the readOnly boolean.
-	_, err := k8s.CreateFileBrowserPod(ctx, ns, pvcName, readOnly, baseURL)
+	_, err := k8s.CreateFileBrowserPod(ctx, ns, pvcNames, readOnly, baseURL)
 	if err != nil {
 		return "", err
 	}
 
 	// 2. Create Service
-	nodePort, err := k8s.CreateFileBrowserService(ctx, ns, pvcName)
+	nodePort, err := k8s.CreateFileBrowserService(ctx, ns)
 	if err != nil {
 		return "", err
 	}
@@ -243,8 +279,41 @@ func (s *K8sService) StartFileBrowser(ctx context.Context, ns, pvcName string, r
 	return nodePort, nil
 }
 
-func (s *K8sService) StopFileBrowser(ctx context.Context, ns, pvcName string) error {
-	return k8s.DeleteFileBrowserResources(ctx, ns, pvcName)
+// EnsureProjectHub creates/ensures the project-level NFS gateway (namespace, PVC, deployment, service).
+func (s *K8sService) EnsureProjectHub(p *project.Project) error {
+	// Derive names
+	ns := utils.GenerateSafeResourceName("project", p.ProjectName, p.PID)
+	pvcName := fmt.Sprintf("project-%d-disk", p.PID)
+
+	// Namespace
+	if err := utils.CreateNamespace(ns); err != nil {
+		if !strings.Contains(strings.ToLower(err.Error()), "already exist") {
+			return fmt.Errorf("failed to ensure project namespace: %w", err)
+		}
+	}
+
+	// PVC
+	if err := utils.CreateHubPVC(ns, pvcName, config.DefaultStorageClassName, config.UserPVSize); err != nil {
+		if !apierrors.IsAlreadyExists(err) {
+			return fmt.Errorf("failed to ensure project hub pvc: %w", err)
+		}
+	}
+
+	// NFS Deployment
+	if err := utils.CreateNFSDeployment(ns, pvcName); err != nil {
+		return fmt.Errorf("failed to ensure project nfs deployment: %w", err)
+	}
+
+	// NFS Service (ClusterIP with NFS ports)
+	if err := utils.CreateNFSServiceWithName(ns, config.ProjectNfsServiceName); err != nil {
+		return fmt.Errorf("failed to ensure project nfs service: %w", err)
+	}
+
+	return nil
+}
+
+func (s *K8sService) StopFileBrowser(ctx context.Context, ns string) error {
+	return k8s.DeleteFileBrowserResources(ctx, ns)
 }
 
 func (s *K8sService) CheckUserStorageExists(ctx context.Context, username string) (bool, error) {
@@ -361,8 +430,11 @@ func (s *K8sService) CreateProjectPVC(ctx context.Context, req job.VolumeSpec) (
 	// 呼叫工具函式生成唯一且合法的 Namespace 名稱
 	targetNamespace := utils.GenerateSafeResourceName("project", req.ProjectName, req.ProjectID)
 
-	// PVC name convention
-	pvcName := fmt.Sprintf("pvc-%s", targetNamespace)
+	// PVC name convention: allow custom name, else default
+	pvcName := req.Name
+	if pvcName == "" {
+		pvcName = fmt.Sprintf("pvc-%s", targetNamespace)
+	}
 
 	// 2. Prepare Labels
 	// 準備 Namespace 標籤
@@ -378,8 +450,8 @@ func (s *K8sService) CreateProjectPVC(ctx context.Context, req job.VolumeSpec) (
 		return nil, fmt.Errorf("failed to ensure namespace: %v", err)
 	}
 
-	// 4. Parse Capacity
-	storageQty, err := resource.ParseQuantity(fmt.Sprintf("%dGi", req.Capacity))
+	// 4. Parse Capacity from Size field (already formatted as "XXGi" by handler)
+	storageQty, err := resource.ParseQuantity(req.Size)
 	if err != nil {
 		return nil, fmt.Errorf("invalid capacity: %v", err)
 	}
@@ -493,10 +565,13 @@ func (s *K8sService) ListAllProjectStorages(ctx context.Context) ([]job.VolumeSp
 
 		result = append(result, job.VolumeSpec{
 			ID:          uint(projectIDUint),
+			ProjectID:   uint(projectIDUint),
+			Name:        pvc.Name, // keep legacy json field populated
 			PVCName:     pvc.Name,
 			ProjectName: projectName,
 			Namespace:   pvc.Namespace,
 			Capacity:    capacityValue,
+			Size:        fmt.Sprintf("%dGi", capacityValue),
 			Status:      string(pvc.Status.Phase),
 			AccessMode:  accessMode,
 			CreatedAt:   pvc.CreationTimestamp.Time,
