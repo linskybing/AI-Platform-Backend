@@ -113,7 +113,7 @@ jobs:
           echo " Both binaries built successfully"
 
       - name: Store build artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: binaries
           path: |
