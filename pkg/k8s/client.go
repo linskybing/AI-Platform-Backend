@@ -171,7 +171,11 @@ func (h *WebSocketIO) pingLoop() {
 		case <-ticker.C:
 			// Lock before writing to prevent race condition with stdout
 			h.mu.Lock()
-			h.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			if err := h.conn.SetWriteDeadline(time.Now().Add(10 * time.Second)); err != nil {
+				h.mu.Unlock()
+				h.Close()
+				return
+			}
 			err := h.conn.WriteMessage(websocket.PingMessage, nil)
 			h.mu.Unlock()
 
@@ -237,13 +241,14 @@ func (h *WebSocketIO) readLoop() {
 
 	// 1. 設定讀取限制與初始 DeadLine
 	h.conn.SetReadLimit(512 * 1024) // 限制最大訊息大小，防止攻擊
-	h.conn.SetReadDeadline(time.Now().Add(pongWait))
+	if err := h.conn.SetReadDeadline(time.Now().Add(pongWait)); err != nil {
+		return
+	}
 
 	// 2. 設定 Pong 處理器
 	// 當收到瀏覽器回傳的 Pong 時，重置死亡倒數
 	h.conn.SetPongHandler(func(string) error {
-		h.conn.SetReadDeadline(time.Now().Add(pongWait))
-		return nil
+		return h.conn.SetReadDeadline(time.Now().Add(pongWait))
 	})
 
 	for {
@@ -260,7 +265,9 @@ func (h *WebSocketIO) readLoop() {
 
 		// 3. 關鍵：收到任何訊息（使用者打字或 Resize）都視為「活著」
 		// 重置讀取超時時間
-		h.conn.SetReadDeadline(time.Now().Add(pongWait))
+		if err := h.conn.SetReadDeadline(time.Now().Add(pongWait)); err != nil {
+			return
+		}
 
 		var msg TerminalMessage
 		if err := json.Unmarshal(message, &msg); err != nil {
@@ -271,7 +278,9 @@ func (h *WebSocketIO) readLoop() {
 		case "stdin":
 			if msg.Data != "" {
 				// 寫入數據到 Pod 的 stdin
-				_, _ = h.stdinWriter.Write([]byte(msg.Data))
+				if _, err := h.stdinWriter.Write([]byte(msg.Data)); err != nil {
+					log.Printf("Failed to write to stdin: %v", err)
+				}
 			}
 		case "resize":
 			// 發送 Resize 事件
@@ -334,7 +343,7 @@ func ExecToPodViaWebSocket(
 		return err
 	}
 
-	return executor.Stream(remotecommand.StreamOptions{
+	return executor.StreamWithContext(context.Background(), remotecommand.StreamOptions{
 		Stdin:             wsIO,
 		Stdout:            wsIO,
 		Stderr:            wsIO,
@@ -710,40 +719,6 @@ func extractServiceNodePorts(obj *unstructured.Unstructured) []int64 {
 	return nodePorts
 }
 
-func getWatchableNamespacedResources(dc *discovery.DiscoveryClient) ([]schema.GroupVersionResource, error) {
-	apiResourceLists, err := dc.ServerPreferredNamespacedResources()
-	if err != nil {
-		return nil, err
-	}
-
-	var result []schema.GroupVersionResource
-	for _, apiList := range apiResourceLists {
-		gv, err := schema.ParseGroupVersion(apiList.GroupVersion)
-		if err != nil {
-			continue
-		}
-		for _, r := range apiList.APIResources {
-			if r.Namespaced && contains(r.Verbs, "watch") && !strings.Contains(r.Name, "/") {
-				result = append(result, schema.GroupVersionResource{
-					Group:    gv.Group,
-					Version:  gv.Version,
-					Resource: r.Name,
-				})
-			}
-		}
-	}
-	return result, nil
-}
-
-func contains(sl []string, s string) bool {
-	for _, item := range sl {
-		if item == s {
-			return true
-		}
-	}
-	return false
-}
-
 func extractStatusFields(obj *unstructured.Unstructured) map[string]interface{} {
 	kind := obj.GetKind()
 	result := map[string]interface{}{}
@@ -951,7 +926,7 @@ func CreateFileBrowserPod(ctx context.Context, ns string, pvcNames []string, rea
 		// Otherwise, delete and recreate to apply new readOnly flag
 		grace := int64(0)
 		_ = Clientset.CoreV1().Pods(ns).Delete(ctx, podName, metav1.DeleteOptions{GracePeriodSeconds: &grace})
-		_ = wait.PollImmediate(200*time.Millisecond, 5*time.Second, func() (bool, error) {
+		_ = wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
 			_, err := Clientset.CoreV1().Pods(ns).Get(ctx, podName, metav1.GetOptions{})
 			if apierrors.IsNotFound(err) {
 				return true, nil
