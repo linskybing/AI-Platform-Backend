@@ -61,7 +61,7 @@ func TestProjectServiceCRUD(t *testing.T) {
 			// Simulate GORM's behavior of setting the PID after successful CREATE
 			p.PID = 1
 		}).Return(nil)
-		
+
 		// CreateProject calls AllocateProjectResources which calls GetProjectByID
 		mockProject.EXPECT().GetProjectByID(uint(1)).Return(project.Project{PID: 1, ProjectName: "proj1", GID: 1}, nil)
 

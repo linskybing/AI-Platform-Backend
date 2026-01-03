@@ -55,16 +55,10 @@ jobs:
         uses: helm/kind-action@v1.10.0
         with:
           version: v0.24.0
+          cluster_name: test-cluster
 
-      - name: Create Kind cluster
-        run: |
-          CLUSTER_NAME=test-cluster
-          kind create cluster --name $CLUSTER_NAME
-          mkdir -p $GITHUB_WORKSPACE/.kube
-          kind get kubeconfig --name $CLUSTER_NAME > $GITHUB_WORKSPACE/.kube/config
-          
       - name: Export KUBECONFIG
-        run: echo "KUBECONFIG=$GITHUB_WORKSPACE/.kube/config" >> $GITHUB_ENV
+        run: echo "KUBECONFIG=$HOME/.kube/config" >> $GITHUB_ENV
 
       - name: Verify Kubernetes cluster
         run: kubectl cluster-info
@@ -72,6 +66,7 @@ jobs:
       - name: Wait for Postgres
         run: |
           echo "Waiting for Postgres to be ready..."
+          sudo apt-get update && sudo apt-get install -y postgresql-client
           for i in {1..20}; do
             pg_isready -h localhost -p 5432 -U test && break
             echo "Attempt $i/20..."
