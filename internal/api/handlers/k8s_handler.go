@@ -691,7 +691,9 @@ func (h *K8sHandler) GetUserProjectStorages(c *gin.Context) {
 // @Failure 500 {object} map[string]string "Internal Server Error"
 // @Router /k8s/storage/projects [post]
 func (h *K8sHandler) CreateProjectStorage(c *gin.Context) {
-	// 1. Bind JSON Payload
+	// TODO: Enable support for multiple project storage locations.
+
+	// Bind JSON Payload
 	var req job.CreateProjectStorageRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
@@ -701,22 +703,17 @@ func (h *K8sHandler) CreateProjectStorage(c *gin.Context) {
 		return
 	}
 
-	// 2. Setup Context
+	// Setup Context
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
 	defer cancel()
 
-	// 2.5 Ensure project hub (namespace + NFS gateway) exists similar to mydrive init
 	project, err := h.ProjectService.GetProject(req.ProjectID)
 	if err != nil || project == nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Project not found"})
 		return
 	}
-	if err := h.K8sService.EnsureProjectHub(project); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to ensure project storage hub", "details": err.Error()})
-		return
-	}
 
-	// 3. Convert request to VolumeSpec
+	// Convert request to VolumeSpec
 	volumeSpec := job.VolumeSpec{
 		ProjectID:        req.ProjectID,
 		ProjectName:      req.ProjectName,
@@ -725,7 +722,6 @@ func (h *K8sHandler) CreateProjectStorage(c *gin.Context) {
 		StorageClassName: req.StorageClass,
 	}
 
-	// 4. Call Service
 	createdPVC, err := h.K8sService.CreateProjectPVC(ctx, volumeSpec)
 	if err != nil {
 		// Check for specific errors (e.g., already exists)
@@ -740,7 +736,7 @@ func (h *K8sHandler) CreateProjectStorage(c *gin.Context) {
 		return
 	}
 
-	// 4. Return Success Response
+	// Return Success Response
 	c.JSON(http.StatusCreated, gin.H{
 		"message":   "Project storage created successfully",
 		"id":        req.ProjectID,
@@ -748,6 +744,36 @@ func (h *K8sHandler) CreateProjectStorage(c *gin.Context) {
 		"namespace": createdPVC.Namespace,
 		"capacity":  req.Capacity,
 		"createdAt": createdPVC.CreationTimestamp,
+	})
+}
+
+// @Router /k8s/storage/projects/{project id} [delete]
+func (h *K8sHandler) DeleteProjectStorage(c *gin.Context) {
+	// 1. Get Project ID from URL
+	projectIDStr := c.Param("id")
+	projectID, err := strconv.ParseUint(projectIDStr, 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid Project ID"})
+		return
+	}
+
+	project, err := h.ProjectService.GetProject(uint(projectID))
+	if err != nil || project == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Project not found"})
+		return
+	}
+
+	// 1. Setup Context with Timeout
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	defer cancel()
+
+	if err := h.K8sService.DeleteProjectAllPVC(ctx, project.ProjectName, project.PID); err != nil {
+		c.JSON(http.StatusInternalServerError, response.ErrorResponse{Error: "Failed to delete storage: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, response.MessageResponse{
+		Message: fmt.Sprintf("Storage for project '%d' has been completely removed", project.PID),
 	})
 }
 
@@ -786,10 +812,10 @@ func (h *K8sHandler) ProjectStorageProxy(c *gin.Context) {
 	targetNamespace := utils.GenerateSafeResourceName("project", project.ProjectName, project.PID)
 
 	// 2. Use the new shared service name (PVC-agnostic)
-	serviceName := config.ProjectStorageServiceName
+	serviceName := config.ProjectStorageBrowserSVCName
 
 	// 3. Construct the internal K8s Cluster DNS URL
-	// targetURL will now be: http://filebrowser-project-svc.<namespace>.svc.cluster.local:80
+	// targetURL will now be: http://storage-svc.<namespace>.svc.cluster.local:80
 	targetURL := fmt.Sprintf("http://%s.%s.svc.cluster.local:80", serviceName, targetNamespace)
 
 	remote, err := url.Parse(targetURL)
@@ -859,10 +885,7 @@ func (h *K8sHandler) StartProjectFileBrowser(c *gin.Context) {
 		c.JSON(http.StatusNotFound, response.ErrorResponse{Error: "Project not found"})
 		return
 	}
-	if err := h.K8sService.EnsureProjectHub(project); err != nil {
-		c.JSON(http.StatusInternalServerError, response.ErrorResponse{Error: "Failed to ensure project storage hub: " + err.Error()})
-		return
-	}
+
 	targetNamespace := utils.GenerateSafeResourceName("project", project.ProjectName, project.PID)
 
 	// 4. Collect all project PVCs in this namespace for multi-mount gateway

@@ -7,7 +7,6 @@ import (
 	"github.com/linskybing/platform-go/internal/application"
 	"github.com/linskybing/platform-go/internal/domain/configfile"
 	"github.com/linskybing/platform-go/internal/domain/group"
-	"github.com/linskybing/platform-go/internal/domain/project"
 	"github.com/linskybing/platform-go/internal/repository"
 )
 
@@ -54,9 +53,9 @@ func RegisterRoutes(r *gin.Engine) {
 			configFiles.GET("", authMiddleware.Admin(), handlers_instance.ConfigFile.ListConfigFilesHandler)
 			configFiles.GET("/:id", authMiddleware.GroupMember(middleware.FromIDParam(repos_instance.View.GetGroupIDByConfigFileID)), handlers_instance.ConfigFile.GetConfigFileHandler)
 			configFiles.GET("/:id/resources", authMiddleware.GroupMember(middleware.FromIDParam(repos_instance.View.GetGroupIDByConfigFileID)), handlers_instance.Resource.ListResourcesByConfigFileID)
-			configFiles.POST("", authMiddleware.GroupMember(middleware.FromProjectIDInPayload(configfile.CreateConfigFileInput{})), handlers_instance.ConfigFile.CreateConfigFileHandler)
-			configFiles.PUT("/:id", authMiddleware.GroupMember(middleware.FromIDParam(repos_instance.View.GetGroupIDByConfigFileID)), handlers_instance.ConfigFile.UpdateConfigFileHandler)
-			configFiles.DELETE("/:id", authMiddleware.GroupMember(middleware.FromIDParam(repos_instance.View.GetGroupIDByConfigFileID)), handlers_instance.ConfigFile.DeleteConfigFileHandler)
+			configFiles.POST("", authMiddleware.GroupManager(middleware.FromProjectIDInPayload(configfile.CreateConfigFileInput{})), handlers_instance.ConfigFile.CreateConfigFileHandler)
+			configFiles.PUT("/:id", authMiddleware.GroupManager(middleware.FromIDParam(repos_instance.View.GetGroupIDByConfigFileID)), handlers_instance.ConfigFile.UpdateConfigFileHandler)
+			configFiles.DELETE("/:id", authMiddleware.GroupManager(middleware.FromIDParam(repos_instance.View.GetGroupIDByConfigFileID)), handlers_instance.ConfigFile.DeleteConfigFileHandler)
 		}
 		projects := auth.Group("/projects")
 		{
@@ -65,17 +64,17 @@ func RegisterRoutes(r *gin.Engine) {
 			projects.GET("/:id", handlers_instance.Project.GetProjectByID)
 			projects.GET("/:id/config-files", handlers_instance.ConfigFile.ListConfigFilesByProjectIDHandler)
 			projects.GET("/:id/resources", handlers_instance.Resource.ListResourcesByProjectID)
-			projects.POST("", authMiddleware.GroupMember(middleware.FromPayload(project.CreateProjectDTO{})), handlers_instance.Project.CreateProject)
-			projects.PUT("/:id", authMiddleware.GroupMember(middleware.FromIDParam(repos_instance.Project.GetGroupIDByProjectID)), handlers_instance.Project.UpdateProject)
-			projects.DELETE("/:id", authMiddleware.GroupMember(middleware.FromIDParam(repos_instance.Project.GetGroupIDByProjectID)), handlers_instance.Project.DeleteProject)
+			projects.POST("", authMiddleware.Admin(), handlers_instance.Project.CreateProject)
+			projects.PUT("/:id", authMiddleware.GroupManager(middleware.FromIDParam(repos_instance.Project.GetGroupIDByProjectID)), handlers_instance.Project.UpdateProject)
+			projects.DELETE("/:id", authMiddleware.GroupAdmin(middleware.FromIDParam(repos_instance.Project.GetGroupIDByProjectID)), handlers_instance.Project.DeleteProject)
 			projects.POST("/:id/gpu-requests", handlers_instance.GPURequest.CreateRequest)
 			projects.GET("/:id/gpu-requests", handlers_instance.GPURequest.ListRequestsByProject)
 
 		}
 		admin := auth.Group("/admin")
 		{
-			admin.GET("/gpu-requests", handlers_instance.GPURequest.ListPendingRequests)
-			admin.PUT("/gpu-requests/:id/status", handlers_instance.GPURequest.ProcessRequest)
+			admin.GET("/gpu-requests", authMiddleware.Admin(), handlers_instance.GPURequest.ListPendingRequests)
+			admin.PUT("/gpu-requests/:id/status", authMiddleware.Admin(), handlers_instance.GPURequest.ProcessRequest)
 		}
 		users := auth.Group("/users")
 		{
@@ -124,6 +123,8 @@ func RegisterRoutes(r *gin.Engine) {
 				projectStorage.POST("/:id/start",
 					authMiddleware.GroupMember(middleware.FromIDParam(repos_instance.Project.GetGroupIDByProjectID)),
 					handlers_instance.K8s.StartProjectFileBrowser)
+
+				projectStorage.DELETE("/:id", authMiddleware.Admin(), handlers_instance.K8s.DeleteProjectStorage)
 
 				projectStorage.DELETE("/:id/stop",
 					authMiddleware.GroupMember(middleware.FromIDParam(repos_instance.Project.GetGroupIDByProjectID)),

@@ -15,7 +15,6 @@ import (
 	"github.com/linskybing/platform-go/pkg/k8s"
 	"github.com/linskybing/platform-go/pkg/utils"
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -292,13 +291,6 @@ func (s *K8sService) EnsureProjectHub(p *project.Project) error {
 		}
 	}
 
-	// PVC
-	if err := utils.CreateHubPVC(ns, pvcName, config.DefaultStorageClassName, config.UserPVSize); err != nil {
-		if !apierrors.IsAlreadyExists(err) {
-			return fmt.Errorf("failed to ensure project hub pvc: %w", err)
-		}
-	}
-
 	// NFS Deployment
 	if err := utils.CreateNFSDeployment(ns, pvcName); err != nil {
 		return fmt.Errorf("failed to ensure project nfs deployment: %w", err)
@@ -427,7 +419,6 @@ func (s *K8sService) StopUserGlobalFileBrowser(ctx context.Context, username str
 func (s *K8sService) CreateProjectPVC(ctx context.Context, req job.VolumeSpec) (*corev1.PersistentVolumeClaim, error) {
 
 	// 1. Generate Safe Name (Using Utils)
-	// 呼叫工具函式生成唯一且合法的 Namespace 名稱
 	targetNamespace := utils.GenerateSafeResourceName("project", req.ProjectName, req.ProjectID)
 
 	// PVC name convention: allow custom name, else default
@@ -437,7 +428,6 @@ func (s *K8sService) CreateProjectPVC(ctx context.Context, req job.VolumeSpec) (
 	}
 
 	// 2. Prepare Labels
-	// 準備 Namespace 標籤
 	nsLabels := map[string]string{
 		"managed-by":   "nthucscc",
 		"type":         "project-space",
@@ -457,18 +447,17 @@ func (s *K8sService) CreateProjectPVC(ctx context.Context, req job.VolumeSpec) (
 	}
 
 	// 5. Prepare PVC Labels (Critical for Filtering)
-	// 準備 PVC 標籤，這對於 List API 的過濾至關重要
 	pvcLabels := map[string]string{
 		"app.kubernetes.io/name":       "filebrowser-storage",
 		"app.kubernetes.io/managed-by": "nthu-cscc",
-		"storage-type":                 "project",                        // 核心過濾鍵
-		"project-id":                   fmt.Sprintf("%d", req.ProjectID), // 唯一識別
+		"storage-type":                 "project",
+		"project-id":                   fmt.Sprintf("%d", req.ProjectID),
 		"project-name":                 req.ProjectName,
 	}
 
 	// Config
-	scName := config.DefaultStorageClassName // 根據你的 Cluster 環境修改 (例如: "nfs-client", "longhorn")
-	accessMode := corev1.ReadWriteMany
+	scName := config.DefaultStorageClassName
+	accessMode := corev1.ReadWriteOnce
 
 	// 6. Create PVC Object
 	pvc := &corev1.PersistentVolumeClaim{
@@ -480,8 +469,6 @@ func (s *K8sService) CreateProjectPVC(ctx context.Context, req job.VolumeSpec) (
 		Spec: corev1.PersistentVolumeClaimSpec{
 			AccessModes: []corev1.PersistentVolumeAccessMode{accessMode},
 
-			// [FIXED] Updated for newer client-go versions (v1.30+)
-			// 使用 VolumeResourceRequirements 取代舊的 ResourceRequirements
 			Resources: corev1.VolumeResourceRequirements{
 				Requests: corev1.ResourceList{
 					corev1.ResourceStorage: storageQty,
@@ -492,7 +479,34 @@ func (s *K8sService) CreateProjectPVC(ctx context.Context, req job.VolumeSpec) (
 		},
 	}
 
-	return k8s.Clientset.CoreV1().PersistentVolumeClaims(targetNamespace).Create(ctx, pvc, metav1.CreateOptions{})
+	pvcClaim, err := k8s.Clientset.CoreV1().PersistentVolumeClaims(targetNamespace).Create(context.TODO(), pvc, metav1.CreateOptions{})
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to create pvc: %w", err)
+	}
+
+	// Deploy NFS Server
+	// This pod mounts the pvcName created above.
+	if err := utils.CreateNFSDeployment(targetNamespace, pvcName); err != nil {
+		return nil, fmt.Errorf("failed to create nfs deployment: %w", err)
+	}
+
+	// Expose NFS Service (Gateway)
+	// This creates the DNS entry: storage-svc.project-<project name>-<unique id>.svc.cluster.local
+	if err := utils.CreateNFSService(targetNamespace); err != nil {
+		return nil, fmt.Errorf("failed to create nfs service: %w", err)
+	}
+
+	return pvcClaim, nil
+}
+
+// delete project storage
+func (s *K8sService) DeleteProjectAllPVC(ctx context.Context, projectName string, projectID uint) error {
+	ns := utils.GenerateSafeResourceName("project", projectName, projectID)
+	if err := utils.DeleteNamespace(ns); err != nil {
+
+	}
+	return nil
 }
 
 // ensureNamespaceWithLabels checks if a namespace exists, creates it if not.

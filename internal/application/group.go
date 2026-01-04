@@ -5,12 +5,13 @@ import (
 	"fmt"
 
 	"github.com/gin-gonic/gin"
+	"github.com/linskybing/platform-go/internal/config"
 	"github.com/linskybing/platform-go/internal/domain/group"
 	"github.com/linskybing/platform-go/internal/repository"
 	"github.com/linskybing/platform-go/pkg/utils"
 )
 
-var ErrReservedGroupName = errors.New("cannot use reserved group name 'super'")
+var ErrReservedGroupName = errors.New("cannot use reserved group name '" + config.ReservedGroupName + "'")
 
 type GroupService struct {
 	Repos *repository.Repos
@@ -31,7 +32,7 @@ func (s *GroupService) GetGroup(id uint) (group.Group, error) {
 }
 
 func (s *GroupService) CreateGroup(c *gin.Context, input group.GroupCreateDTO) (group.Group, error) {
-	if input.GroupName == "super" {
+	if input.GroupName == config.ReservedGroupName {
 		return group.Group{}, ErrReservedGroupName
 	}
 
@@ -60,7 +61,7 @@ func (s *GroupService) UpdateGroup(c *gin.Context, id uint, input group.GroupUpd
 	oldGroup := grp
 
 	if input.GroupName != nil {
-		if *input.GroupName == "super" {
+		if *input.GroupName == config.ReservedGroupName {
 			return group.Group{}, ErrReservedGroupName
 		}
 		grp.GroupName = *input.GroupName
@@ -85,7 +86,7 @@ func (s *GroupService) DeleteGroup(c *gin.Context, id uint) error {
 		return err
 	}
 
-	if group.GroupName == "super" {
+	if group.GroupName == config.ReservedGroupName {
 		return ErrReservedGroupName
 	}
 

@@ -186,6 +186,40 @@ func (a *Auth) GroupMember(extractor GIDExtractor) gin.HandlerFunc {
 	}
 }
 
+// GroupMember checks if user is a manager or admin of the group
+func (a *Auth) GroupManager(extractor GIDExtractor) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		gid, err := extractor(c, a.repos)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, response.ErrorResponse{Error: "Invalid input: " + err.Error()})
+			c.Abort()
+			return
+		}
+
+		if gid == 0 {
+			c.JSON(http.StatusBadRequest, response.ErrorResponse{Error: "Group ID cannot be zero"})
+			c.Abort()
+			return
+		}
+
+		uid, err := utils.GetUserIDFromContext(c)
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, response.ErrorResponse{Error: "Unauthorized"})
+			c.Abort()
+			return
+		}
+
+		permitted, err := utils.CheckGroupManagePermission(uid, gid, a.repos.View)
+		if err != nil || !permitted {
+			c.JSON(http.StatusForbidden, response.ErrorResponse{Error: "Permission denied for this group"})
+			c.Abort()
+			return
+		}
+
+		c.Next()
+	}
+}
+
 // GroupAdmin checks if user is an admin of the group
 func (a *Auth) GroupAdmin(extractor GIDExtractor) gin.HandlerFunc {
 	return func(c *gin.Context) {

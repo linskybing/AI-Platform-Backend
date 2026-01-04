@@ -6,12 +6,17 @@ import (
 	"log"
 
 	"github.com/gin-gonic/gin"
+	"github.com/linskybing/platform-go/internal/config"
 	"github.com/linskybing/platform-go/internal/domain/group"
 	"github.com/linskybing/platform-go/internal/repository"
 	"github.com/linskybing/platform-go/pkg/utils"
 )
 
-var ErrReservedUser = errors.New("cannot modify reserved user & group 'admin & super'")
+var (
+	ErrReservedUser                = errors.New("cannot modify reserved user & group 'admin & super'")
+	ErrCannotRemoveAdminFromSuper  = errors.New("cannot remove admin user from " + config.ReservedGroupName + " group")
+	ErrCannotDowngradeAdminInSuper = errors.New("cannot downgrade admin user role in " + config.ReservedGroupName + " group")
+)
 
 type UserGroupService struct {
 	Repos *repository.Repos
@@ -83,6 +88,18 @@ func (s *UserGroupService) CreateUserGroup(c *gin.Context, userGroup *group.User
 }
 
 func (s *UserGroupService) UpdateUserGroup(c *gin.Context, userGroup *group.UserGroup, existing group.UserGroup) (*group.UserGroup, error) {
+	// Check if trying to downgrade admin user in super group
+	groupData, err := s.Repos.Group.GetGroupByID(userGroup.GID)
+	if err == nil && groupData.GroupName == config.ReservedGroupName {
+		username, err := s.Repos.User.GetUsernameByID(userGroup.UID)
+		if err == nil && username == config.ReservedAdminUsername {
+			// Check if role is being changed to something other than admin
+			if userGroup.Role != "admin" && existing.Role == "admin" {
+				return nil, ErrCannotDowngradeAdminInSuper
+			}
+		}
+	}
+
 	if err := s.Repos.UserGroup.UpdateUserGroup(userGroup); err != nil {
 		return nil, err
 	}
@@ -100,7 +117,16 @@ func (s *UserGroupService) DeleteUserGroup(c *gin.Context, uid, gid uint) error 
 		return err
 	}
 
-	// Check if this is the admin user or super group (no GroupName in group.UserGroup, so we need to query the group)
+	// Check if trying to remove admin user from super group
+	groupData, err := s.Repos.Group.GetGroupByID(gid)
+	if err == nil && groupData.GroupName == config.ReservedGroupName {
+		username, err := s.Repos.User.GetUsernameByID(uid)
+		if err == nil && username == config.ReservedAdminUsername {
+			return ErrCannotRemoveAdminFromSuper
+		}
+	}
+
+	// Check if this is the admin user or super group (legacy check, kept for backward compatibility)
 	if uid == 1 && gid == 1 {
 		return ErrReservedUser
 	}

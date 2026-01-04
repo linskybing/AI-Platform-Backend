@@ -394,11 +394,11 @@ func (s *ConfigFileService) CreateInstance(c *gin.Context, id uint) error {
 
 		jsonBytes := []byte(replacedJSON)
 
-		// Normalize NFS servers: if path points to project storage (/srv/...), force project NFS server
-		jsonBytes, err = s.rewriteNfsServers(jsonBytes, nfsServerAddress, projectNfsServerAddress)
-		if err != nil {
-			return err
-		}
+		// // Normalize NFS servers: if path points to project storage (/srv/...), force project NFS server
+		// jsonBytes, err = s.rewriteNfsServers(jsonBytes, nfsServerAddress, projectNfsServerAddress)
+		// if err != nil {
+		// 	return err
+		// }
 
 		// Apply ReadOnly restrictions if necessary
 		if shouldEnforceRO {
@@ -506,7 +506,7 @@ func (s *ConfigFileService) enforceReadOnly(jsonBytes []byte) ([]byte, error) {
 	return json.Marshal(obj)
 }
 
-// rewriteNfsServers ensures project mounts (path starts with /srv/) use the project NFS server.
+// rewriteNfsServers ensures project mounts use the correct NFS server based on server hint.
 func (s *ConfigFileService) rewriteNfsServers(jsonBytes []byte, personalAddr, projectAddr string) ([]byte, error) {
 	var obj map[string]interface{}
 	if err := json.Unmarshal(jsonBytes, &obj); err != nil {
@@ -552,23 +552,29 @@ func (s *ConfigFileService) rewriteNfsServers(jsonBytes []byte, personalAddr, pr
 		path, _ := nfs["path"].(string)
 		server, _ := nfs["server"].(string)
 
-		// If path indicates project storage, force project server
-		if strings.HasPrefix(path, "/srv/") {
-			nfs["server"] = projectAddr
-			// Map to actual export root on gateway (storage-gateway exports /exports)
-			trimmed := strings.TrimPrefix(path, "/srv/")
-			nfs["path"] = "/exports/" + trimmed
-			// If subPath is empty, ensure it's relative pvc name (strip leading slash)
-			if subPath, ok := nfs["subPath"].(string); ok {
-				nfs["subPath"] = strings.TrimPrefix(subPath, "/")
-			}
-		} else {
-			// Default to personal server for everything else
-			nfs["server"] = personalAddr
+		// Determine if this is project storage or personal storage:
+		// 1. If path starts with /srv (legacy format), it's project storage
+		// 2. If server contains projectAddr IP (resolved from {{projectNfsServer}}), it's project storage
+		// 3. Otherwise, default to personal storage
+
+		isProjectStorage := strings.HasPrefix(path, "/srv")
+
+		// Check if server IP matches project NFS server (after variable substitution)
+		if !isProjectStorage && server == projectAddr && projectAddr != "" {
+			isProjectStorage = true
 		}
 
-		// If legacy server value matched personal address but path is /srv, we already override
-		_ = server
+		if isProjectStorage {
+			// Ensure project storage uses project NFS server
+			if projectAddr != "" {
+				nfs["server"] = projectAddr
+			}
+		} else {
+			// Default personal storage uses personal NFS server
+			if personalAddr != "" {
+				nfs["server"] = personalAddr
+			}
+		}
 	}
 
 	return json.Marshal(obj)

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/linskybing/platform-go/internal/api/middleware"
+	"github.com/linskybing/platform-go/internal/config"
 	"github.com/linskybing/platform-go/internal/domain/user"
 	"github.com/linskybing/platform-go/internal/repository"
 	"golang.org/x/crypto/bcrypt"
@@ -17,6 +18,7 @@ var (
 	ErrMissingOldPassword  = errors.New("old password is required to change password")
 	ErrPasswordHashFailure = errors.New("failed to hash new password")
 	ErrUsernameTaken       = errors.New("username already taken")
+	ErrReservedAdminUser   = errors.New("cannot delete or downgrade reserved admin user '" + config.ReservedAdminUsername + "'")
 )
 
 type UserService struct {
@@ -96,6 +98,11 @@ func (s *UserService) UpdateUser(id uint, input user.UpdateUserInput) (user.User
 		return user.User{}, ErrUserNotFound
 	}
 
+	// Prevent downgrading the reserved admin user
+	if usr.Username == config.ReservedAdminUsername && input.Type != nil && *input.Type != "admin" {
+		return user.User{}, ErrReservedAdminUser
+	}
+
 	if input.Password != nil {
 		if input.OldPassword == nil {
 			return user.User{}, ErrMissingOldPassword
@@ -130,6 +137,16 @@ func (s *UserService) UpdateUser(id uint, input user.UpdateUserInput) (user.User
 }
 
 func (s *UserService) RemoveUser(id uint) error {
+	usr, err := s.Repos.User.GetUserRawByID(id)
+	if err != nil {
+		return ErrUserNotFound
+	}
+
+	// Prevent deleting the reserved admin user
+	if usr.Username == config.ReservedAdminUsername {
+		return ErrReservedAdminUser
+	}
+
 	return s.Repos.User.DeleteUser(id)
 }
 

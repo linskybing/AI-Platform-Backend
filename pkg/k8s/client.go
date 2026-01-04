@@ -932,6 +932,7 @@ func CreateFileBrowserPod(ctx context.Context, ns string, pvcNames []string, rea
 	}
 
 	// Build volumes and mounts per PVC
+	// TODO: Support multiple project storage instances.
 	var volumes []corev1.Volume
 	var mounts []corev1.VolumeMount
 	for idx, pvc := range pvcNames {
@@ -944,7 +945,7 @@ func CreateFileBrowserPod(ctx context.Context, ns string, pvcNames []string, rea
 		})
 		mounts = append(mounts, corev1.VolumeMount{
 			Name:      volName,
-			MountPath: fmt.Sprintf("/srv/%s", pvc),
+			MountPath: "/srv", //fmt.Sprintf("/srv", pvc)
 			ReadOnly:  readOnly,
 		})
 	}
@@ -988,7 +989,7 @@ func CreateFileBrowserPod(ctx context.Context, ns string, pvcNames []string, rea
 
 // CreateFileBrowserService creates a service for filebrowser
 func CreateFileBrowserService(ctx context.Context, ns string) (string, error) {
-	svcName := config.ProjectStorageServiceName
+	svcName := config.ProjectStorageBrowserSVCName
 
 	// Check if service already exists
 	svc, err := Clientset.CoreV1().Services(ns).Get(ctx, svcName, metav1.GetOptions{})
@@ -1010,7 +1011,7 @@ func CreateFileBrowserService(ctx context.Context, ns string) (string, error) {
 				"app":  "filebrowser",
 				"role": "project-storage",
 			},
-			Type: corev1.ServiceTypeNodePort,
+			Type: corev1.ServiceTypeClusterIP,
 			Ports: []corev1.ServicePort{
 				{
 					Port:       80,
@@ -1035,7 +1036,7 @@ func CreateFileBrowserService(ctx context.Context, ns string) (string, error) {
 // DeleteFileBrowserResources deletes the pod and service
 func DeleteFileBrowserResources(ctx context.Context, ns string) error {
 	podName := "filebrowser-project"
-	svcName := config.ProjectStorageServiceName
+	svcName := config.ProjectStorageBrowserSVCName
 
 	// Delete Service
 	err := Clientset.CoreV1().Services(ns).Delete(ctx, svcName, metav1.DeleteOptions{})

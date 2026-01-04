@@ -24,6 +24,7 @@ var (
 	Issuer                  string
 	GroupAdminRoles         = []string{"admin"}
 	GroupUpdateRoles        = []string{"admin", "manager"}
+	GroupAccessRoles        = []string{"admin", "manager", "user"}
 	MinioEndpoint           string
 	MinioAccessKey          string
 	MinioSecretKey          string
@@ -34,10 +35,14 @@ var (
 	DefaultStorageClassName = "longhorn"
 	DefaultStorageSize      = "3Gi"
 	UserPVSize              = "50Gi"
+	// Reserved names that cannot be deleted or downgraded
+	ReservedGroupName     = "super"
+	ReservedAdminUsername = "admin"
 	// K8s Service Names
-	PersonalStorageServiceName string
-	ProjectStorageServiceName  string
-	ProjectNfsServiceName      string
+	PersonalStorageServiceName   string
+	ProjectStorageServiceName    string
+	ProjectStorageBrowserSVCName string
+	ProjectNfsServiceName        string
 )
 
 func LoadConfig() {
@@ -63,8 +68,9 @@ func LoadConfig() {
 
 	// K8s Service Names
 	PersonalStorageServiceName = getEnv("PERSONAL_STORAGE_SERVICE_NAME", "storage-svc")
-	ProjectStorageServiceName = getEnv("PROJECT_STORAGE_SERVICE_NAME", "filebrowser-project-svc")
-	ProjectNfsServiceName = getEnv("PROJECT_NFS_SERVICE_NAME", "project-nfs-svc")
+	ProjectStorageServiceName = getEnv("PROJECT_STORAGE_SERVICE_NAME", "storage-svc")
+	ProjectStorageBrowserSVCName = getEnv("PROJECT_STORAGE_BROWSER_SVC_NAME", "filebrowser-project-svc")
+	ProjectNfsServiceName = getEnv("PROJECT_NFS_SERVICE_NAME", "storage-svc")
 }
 
 func getEnv(key, fallback string) string {
